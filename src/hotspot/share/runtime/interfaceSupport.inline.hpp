@@ -453,6 +453,7 @@ class RuntimeHistogramElement : public HistogramElement {
 
 #define JNI_ENTRY_NO_PRESERVE(result_type, header)                   \
 extern "C" {                                                         \
+  result_type JNICALL header;                                        \
   result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     assert( !VerifyJNIEnvThread || (thread == Thread::current()), "JNIEnv is only valid in same thread"); \
@@ -478,6 +479,7 @@ extern "C" {                                                         \
 
 #define JVM_ENTRY(result_type, header)                               \
 extern "C" {                                                         \
+  result_type JNICALL header;                                        \
   result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     ThreadInVMfromNative __tiv(thread);                              \
