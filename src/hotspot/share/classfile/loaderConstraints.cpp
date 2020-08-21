@@ -173,7 +173,7 @@ void LoaderConstraintTable::purge_loader_constraints() {
   }
 }
 
-void log_ldr_constraint_msg(Symbol* class_name, const char* reason,
+static void log_ldr_constraint_msg(Symbol* class_name, const char* reason,
                         Handle class_loader1, Handle class_loader2) {
   LogTarget(Info, class, loader, constraints) lt;
   if (lt.is_enabled()) {

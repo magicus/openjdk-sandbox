@@ -93,7 +93,7 @@ static volatile size_t _items_count = 0;
 volatile bool _alt_hash = false;
 static juint murmur_seed = 0;
 
-uintx hash_string(const jchar* s, int len, bool useAlt) {
+static uintx hash_string(const jchar* s, int len, bool useAlt) {
   return  useAlt ?
     AltHashing::murmur3_32(murmur_seed, s, len) :
     java_lang_String::hash_code(s, len);

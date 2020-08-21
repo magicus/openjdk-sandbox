@@ -1356,7 +1356,7 @@ class InterfaceVisiterClosure : public StackObj {
 };
 
 // Visit all interfaces with at least one itable method
-void visit_all_interfaces(Array<InstanceKlass*>* transitive_intf, InterfaceVisiterClosure *blk) {
+static void visit_all_interfaces(Array<InstanceKlass*>* transitive_intf, InterfaceVisiterClosure *blk) {
   // Handle array argument
   for(int i = 0; i < transitive_intf->length(); i++) {
     InstanceKlass* intf = transitive_intf->at(i);

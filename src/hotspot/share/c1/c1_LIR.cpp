@@ -1352,7 +1352,7 @@ void LIR_List::unlock_object(LIR_Opr hdr, LIR_Opr obj, LIR_Opr lock, LIR_Opr scr
 }
 
 
-void check_LIR() {
+static void check_LIR() {
   // cannot do the proper checking as PRODUCT and other modes return different results
   // guarantee(sizeof(LIR_OprDesc) == wordSize, "may not have a v-table");
 }

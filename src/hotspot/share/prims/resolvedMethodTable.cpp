@@ -52,7 +52,7 @@ static const size_t GROW_HINT = 32;
 
 static const size_t ResolvedMethodTableSizeLog = 10;
 
-unsigned int method_hash(const Method* method) {
+static unsigned int method_hash(const Method* method) {
   unsigned int hash = method->klass_name()->identity_hash();
   hash = (hash * 31) ^ method->name()->identity_hash();
   hash = (hash * 31) ^ method->signature()->identity_hash();

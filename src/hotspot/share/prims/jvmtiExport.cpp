@@ -2127,7 +2127,7 @@ void JvmtiExport::post_native_method_bind(Method* method, address* function_ptr)
 }
 
 // Returns a record containing inlining information for the given nmethod
-jvmtiCompiledMethodLoadInlineRecord* create_inline_record(nmethod* nm) {
+static jvmtiCompiledMethodLoadInlineRecord* create_inline_record(nmethod* nm) {
   jint numstackframes = 0;
   jvmtiCompiledMethodLoadInlineRecord* record = (jvmtiCompiledMethodLoadInlineRecord*)NEW_RESOURCE_OBJ(jvmtiCompiledMethodLoadInlineRecord);
   record->header.kind = JVMTI_CMLR_INLINE_INFO;

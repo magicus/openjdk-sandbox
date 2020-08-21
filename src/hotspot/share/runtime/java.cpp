@@ -98,7 +98,7 @@ int compare_methods(Method** a, Method** b) {
        - ((*a)->invocation_count() + (*a)->compiled_invocation_count());
 }
 
-void collect_profiled_methods(Method* m) {
+static void collect_profiled_methods(Method* m) {
   Thread* thread = Thread::current();
   methodHandle mh(thread, m);
   if ((m->method_data() != NULL) &&
@@ -107,7 +107,7 @@ void collect_profiled_methods(Method* m) {
   }
 }
 
-void print_method_profiling_data() {
+static void print_method_profiling_data() {
   if (ProfileInterpreter COMPILER1_PRESENT(|| C1UpdateMethodData) &&
      (PrintMethodData || CompilerOracle::should_print_methods())) {
     ResourceMark rm;
@@ -571,7 +571,7 @@ void vm_direct_exit(int code) {
   os::exit(code);
 }
 
-void vm_perform_shutdown_actions() {
+static void vm_perform_shutdown_actions() {
   if (is_init_completed()) {
     Thread* thread = Thread::current_or_null();
     if (thread != NULL && thread->is_Java_thread()) {
@@ -606,7 +606,7 @@ void vm_abort(bool dump_core) {
   ShouldNotReachHere();
 }
 
-void vm_notify_during_cds_dumping(const char* error, const char* message) {
+static void vm_notify_during_cds_dumping(const char* error, const char* message) {
   if (error != NULL) {
     tty->print_cr("Error occurred during CDS dumping");
     tty->print("%s", error);
@@ -626,7 +626,7 @@ void vm_exit_during_cds_dumping(const char* error, const char* message) {
   vm_abort(false);
 }
 
-void vm_notify_during_shutdown(const char* error, const char* message) {
+static void vm_notify_during_shutdown(const char* error, const char* message) {
   if (error != NULL) {
     tty->print_cr("Error occurred during initialization of VM");
     tty->print("%s", error);

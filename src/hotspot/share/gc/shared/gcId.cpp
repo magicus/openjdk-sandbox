@@ -30,7 +30,7 @@
 
 uint GCId::_next_id = 0;
 
-NamedThread* currentNamedthread() {
+static NamedThread* currentNamedthread() {
   assert(Thread::current()->is_Named_thread(), "This thread must be NamedThread");
   return (NamedThread*)Thread::current();
 }

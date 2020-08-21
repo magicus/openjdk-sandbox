@@ -129,7 +129,7 @@ intx CompilerConfig::scaled_freq_log(intx freq_log, double scale) {
 }
 
 #ifdef TIERED
-void set_client_compilation_mode() {
+static void set_client_compilation_mode() {
   Compilation_mode = CompMode_client;
   CompLevel_highest_tier = CompLevel_simple;
   FLAG_SET_ERGO(TieredCompilation, false);
@@ -181,7 +181,7 @@ void set_client_compilation_mode() {
   }
 }
 
-bool compilation_mode_selected() {
+static bool compilation_mode_selected() {
   return !FLAG_IS_DEFAULT(TieredCompilation) ||
          !FLAG_IS_DEFAULT(TieredStopAtLevel) ||
          !FLAG_IS_DEFAULT(UseAOT)
@@ -189,7 +189,7 @@ bool compilation_mode_selected() {
                     || !FLAG_IS_DEFAULT(UseJVMCICompiler));
 }
 
-void select_compilation_mode_ergonomically() {
+static void select_compilation_mode_ergonomically() {
 #if defined(_WINDOWS) && !defined(_LP64)
   if (FLAG_IS_DEFAULT(NeverActAsServerClassMachine)) {
     FLAG_SET_ERGO(NeverActAsServerClassMachine, true);
@@ -290,7 +290,7 @@ void CompilerConfig::set_tiered_flags() {
 #endif // TIERED
 
 #if INCLUDE_JVMCI
-void set_jvmci_specific_flags() {
+static void set_jvmci_specific_flags() {
   if (UseJVMCICompiler) {
     Compilation_mode = CompMode_server;
 

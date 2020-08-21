@@ -1019,7 +1019,7 @@ const char* Arguments::handle_aliases_and_deprecation(const char* arg, bool warn
   return NULL;
 }
 
-void log_deprecated_flag(const char* name, bool on, AliasedLoggingFlag alf) {
+static void log_deprecated_flag(const char* name, bool on, AliasedLoggingFlag alf) {
   LogTagType tagSet[] = {alf.tag0, alf.tag1, alf.tag2, alf.tag3, alf.tag4, alf.tag5};
   // Set tagset string buffer at max size of 256, large enough for any alias tagset
   const int max_tagset_size = 256;
@@ -1635,7 +1635,7 @@ static void no_shared_spaces(const char* message) {
   }
 }
 
-void set_object_alignment() {
+static void set_object_alignment() {
   // Object alignment.
   assert(is_power_of_2(ObjectAlignmentInBytes), "ObjectAlignmentInBytes must be power of 2");
   MinObjAlignmentInBytes     = ObjectAlignmentInBytes;
@@ -2328,7 +2328,7 @@ jint Arguments::parse_vm_init_args(const JavaVMInitArgs *vm_options_args,
 // represents a valid JDWP agent.  is_path==true denotes that we
 // are dealing with -agentpath (case where name is a path), otherwise with
 // -agentlib
-bool valid_jdwp_agent(char *name, bool is_path) {
+static bool valid_jdwp_agent(char *name, bool is_path) {
   char *_name;
   const char *_jdwp = "jdwp";
   size_t _len_jdwp, _len_prefix;

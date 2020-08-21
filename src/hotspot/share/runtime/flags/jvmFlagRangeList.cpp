@@ -242,19 +242,19 @@ public:
 };
 
 // No constraint emitting
-void emit_range_no(...)                         { /* NOP */ }
+static void emit_range_no(...)                         { /* NOP */ }
 
 // No constraint emitting if function argument is NOT provided
-void emit_range_bool(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_range_ccstr(const JVMFlag* /*flag*/)     { /* NOP */ }
-void emit_range_ccstrlist(const JVMFlag* /*flag*/) { /* NOP */ }
-void emit_range_int(const JVMFlag* /*flag*/)       { /* NOP */ }
-void emit_range_intx(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_range_uint(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_range_uintx(const JVMFlag* /*flag*/)     { /* NOP */ }
-void emit_range_uint64_t(const JVMFlag* /*flag*/)  { /* NOP */ }
-void emit_range_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
-void emit_range_double(const JVMFlag* /*flag*/)    { /* NOP */ }
+static void emit_range_bool(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_range_ccstr(const JVMFlag* /*flag*/)     { /* NOP */ }
+static void emit_range_ccstrlist(const JVMFlag* /*flag*/) { /* NOP */ }
+static void emit_range_int(const JVMFlag* /*flag*/)       { /* NOP */ }
+static void emit_range_intx(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_range_uint(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_range_uintx(const JVMFlag* /*flag*/)     { /* NOP */ }
+static void emit_range_uint64_t(const JVMFlag* /*flag*/)  { /* NOP */ }
+static void emit_range_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
+static void emit_range_double(const JVMFlag* /*flag*/)    { /* NOP */ }
 
 // JVMFlagRange emitting code functions if range arguments are provided
 void emit_range_int(const JVMFlag* flag, int min, int max)       {

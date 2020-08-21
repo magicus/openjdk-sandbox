@@ -284,7 +284,7 @@ void Universe::check_alignment(uintx size, uintx alignment, const char* name) {
   }
 }
 
-void initialize_basic_type_klass(Klass* k, TRAPS) {
+static void initialize_basic_type_klass(Klass* k, TRAPS) {
   Klass* ok = SystemDictionary::Object_klass();
 #if INCLUDE_CDS
   if (UseSharedSpaces) {
