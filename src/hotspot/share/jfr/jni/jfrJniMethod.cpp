@@ -39,6 +39,7 @@
 #include "jfr/recorder/stacktrace/jfrStackTraceRepository.hpp"
 #include "jfr/recorder/stringpool/jfrStringPool.hpp"
 #include "jfr/jni/jfrJavaSupport.hpp"
+#include "jfr/jni/jfrJniMethod.hpp"
 #include "jfr/jni/jfrJniMethodRegistration.hpp"
 #include "jfr/instrumentation/jfrEventClassTransformer.hpp"
 #include "jfr/instrumentation/jfrJvmtiAgent.hpp"
