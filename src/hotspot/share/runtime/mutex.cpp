@@ -267,7 +267,7 @@ Mutex::~Mutex() {
 }
 
 // Only Threads_lock, Heap_lock and SR_lock may be safepoint_check_sometimes.
-static bool is_sometimes_ok(const char* name) {
+bool is_sometimes_ok(const char* name) {
   return (strcmp(name, "Threads_lock") == 0 || strcmp(name, "Heap_lock") == 0 || strcmp(name, "SR_lock") == 0);
 }
 

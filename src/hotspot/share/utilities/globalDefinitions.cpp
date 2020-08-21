@@ -327,7 +327,7 @@ int type2aelembytes(BasicType t, bool allow_address) {
 static const jlong high_bit   = (jlong)1 << (jlong)63;
 static const jlong other_bits = ~high_bit;
 
-static jlong float2long(jfloat f) {
+jlong float2long(jfloat f) {
   jlong tmp = (jlong) f;
   if (tmp != high_bit) {
     return tmp;
@@ -344,7 +344,7 @@ static jlong float2long(jfloat f) {
 }
 
 
-static jlong double2long(jdouble f) {
+jlong double2long(jdouble f) {
   jlong tmp = (jlong) f;
   if (tmp != high_bit) {
     return tmp;
