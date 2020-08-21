@@ -146,6 +146,7 @@ static JavaThread* get_current_thread(bool allow_null=true) {
 // Entry to native method implementation that transitions
 // current thread to '_thread_in_vm'.
 #define C2V_VMENTRY(result_type, name, signature)        \
+  JNIEXPORT result_type JNICALL c2v_ ## name signature;  \
   JNIEXPORT result_type JNICALL c2v_ ## name signature { \
   JavaThread* thread = get_current_thread();             \
   if (thread == NULL) {                                  \
@@ -157,6 +158,7 @@ static JavaThread* get_current_thread(bool allow_null=true) {
   C2V_BLOCK(result_type, name, signature)
 
 #define C2V_VMENTRY_(result_type, name, signature, result) \
+  JNIEXPORT result_type JNICALL c2v_ ## name signature;  \
   JNIEXPORT result_type JNICALL c2v_ ## name signature { \
   JavaThread* thread = get_current_thread();             \
   if (thread == NULL) {                                  \
@@ -173,6 +175,7 @@ static JavaThread* get_current_thread(bool allow_null=true) {
 // Entry to native method implementation that does not transition
 // current thread to '_thread_in_vm'.
 #define C2V_VMENTRY_PREFIX(result_type, name, signature) \
+  JNIEXPORT result_type JNICALL c2v_ ## name signature;  \
   JNIEXPORT result_type JNICALL c2v_ ## name signature { \
   JavaThread* thread = get_current_thread();
 

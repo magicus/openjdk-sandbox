@@ -92,6 +92,7 @@ static struct JNINativeInterface_ * unchecked_jni_NativeInterface;
 
 #define JNI_ENTRY_CHECKED(result_type, header)                           \
 extern "C" {                                                             \
+  result_type JNICALL header;                                            \
   result_type JNICALL header {                                           \
     JavaThread* thr = (JavaThread*) Thread::current_or_null();           \
     if (thr == NULL || !thr->is_Java_thread()) {                         \

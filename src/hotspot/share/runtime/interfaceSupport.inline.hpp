@@ -464,6 +464,7 @@ extern "C" {                                                         \
 
 #define JNI_LEAF(result_type, header)                                \
 extern "C" {                                                         \
+  result_type JNICALL header;                                        \
   result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     assert( !VerifyJNIEnvThread || (thread == Thread::current()), "JNIEnv is only valid in same thread"); \
@@ -489,6 +490,7 @@ extern "C" {                                                         \
 
 #define JVM_ENTRY_NO_ENV(result_type, header)                        \
 extern "C" {                                                         \
+  result_type JNICALL header;                                        \
   result_type JNICALL header {                                       \
     JavaThread* thread = JavaThread::current();                      \
     ThreadInVMfromNative __tiv(thread);                              \
@@ -498,6 +500,7 @@ extern "C" {                                                         \
 
 #define JVM_LEAF(result_type, header)                                \
 extern "C" {                                                         \
+  result_type JNICALL header;                                        \
   result_type JNICALL header {                                       \
     VM_Exit::block_if_vm_exited();                                   \
     VM_LEAF_BASE(result_type, header)
