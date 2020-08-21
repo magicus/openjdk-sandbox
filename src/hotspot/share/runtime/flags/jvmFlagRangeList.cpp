@@ -257,25 +257,25 @@ static void emit_range_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
 static void emit_range_double(const JVMFlag* /*flag*/)    { /* NOP */ }
 
 // JVMFlagRange emitting code functions if range arguments are provided
-void emit_range_int(const JVMFlag* flag, int min, int max)       {
+static void emit_range_int(const JVMFlag* flag, int min, int max)       {
   JVMFlagRangeList::add(new JVMFlagRange_int(flag, min, max));
 }
-void emit_range_intx(const JVMFlag* flag, intx min, intx max) {
+static void emit_range_intx(const JVMFlag* flag, intx min, intx max) {
   JVMFlagRangeList::add(new JVMFlagRange_intx(flag, min, max));
 }
-void emit_range_uint(const JVMFlag* flag, uint min, uint max) {
+static void emit_range_uint(const JVMFlag* flag, uint min, uint max) {
   JVMFlagRangeList::add(new JVMFlagRange_uint(flag, min, max));
 }
-void emit_range_uintx(const JVMFlag* flag, uintx min, uintx max) {
+static void emit_range_uintx(const JVMFlag* flag, uintx min, uintx max) {
   JVMFlagRangeList::add(new JVMFlagRange_uintx(flag, min, max));
 }
-void emit_range_uint64_t(const JVMFlag* flag, uint64_t min, uint64_t max) {
+static void emit_range_uint64_t(const JVMFlag* flag, uint64_t min, uint64_t max) {
   JVMFlagRangeList::add(new JVMFlagRange_uint64_t(flag, min, max));
 }
-void emit_range_size_t(const JVMFlag* flag, size_t min, size_t max) {
+static void emit_range_size_t(const JVMFlag* flag, size_t min, size_t max) {
   JVMFlagRangeList::add(new JVMFlagRange_size_t(flag, min, max));
 }
-void emit_range_double(const JVMFlag* flag, double min, double max) {
+static void emit_range_double(const JVMFlag* flag, double min, double max) {
   JVMFlagRangeList::add(new JVMFlagRange_double(flag, min, max));
 }
 

@@ -188,28 +188,28 @@ static void emit_constraint_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
 static void emit_constraint_double(const JVMFlag* /*flag*/)    { /* NOP */ }
 
 // JVMFlagConstraint emitting code functions if function argument is provided
-void emit_constraint_bool(const JVMFlag* flag, JVMFlagConstraintFunc_bool func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_bool(const JVMFlag* flag, JVMFlagConstraintFunc_bool func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_bool(flag, func, type));
 }
-void emit_constraint_int(const JVMFlag* flag, JVMFlagConstraintFunc_int func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_int(const JVMFlag* flag, JVMFlagConstraintFunc_int func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_int(flag, func, type));
 }
-void emit_constraint_intx(const JVMFlag* flag, JVMFlagConstraintFunc_intx func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_intx(const JVMFlag* flag, JVMFlagConstraintFunc_intx func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_intx(flag, func, type));
 }
-void emit_constraint_uint(const JVMFlag* flag, JVMFlagConstraintFunc_uint func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_uint(const JVMFlag* flag, JVMFlagConstraintFunc_uint func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_uint(flag, func, type));
 }
-void emit_constraint_uintx(const JVMFlag* flag, JVMFlagConstraintFunc_uintx func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_uintx(const JVMFlag* flag, JVMFlagConstraintFunc_uintx func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_uintx(flag, func, type));
 }
-void emit_constraint_uint64_t(const JVMFlag* flag, JVMFlagConstraintFunc_uint64_t func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_uint64_t(const JVMFlag* flag, JVMFlagConstraintFunc_uint64_t func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_uint64_t(flag, func, type));
 }
-void emit_constraint_size_t(const JVMFlag* flag, JVMFlagConstraintFunc_size_t func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_size_t(const JVMFlag* flag, JVMFlagConstraintFunc_size_t func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_size_t(flag, func, type));
 }
-void emit_constraint_double(const JVMFlag* flag, JVMFlagConstraintFunc_double func, JVMFlagConstraint::ConstraintType type) {
+static void emit_constraint_double(const JVMFlag* flag, JVMFlagConstraintFunc_double func, JVMFlagConstraint::ConstraintType type) {
   JVMFlagConstraintList::add(new JVMFlagConstraint_double(flag, func, type));
 }
 
