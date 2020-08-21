@@ -33,7 +33,7 @@
 /*
  * Sizes are sorted in descenting order for reporting
  */
-int compare_malloc_size(const MallocSite& s1, const MallocSite& s2) {
+static int compare_malloc_size(const MallocSite& s1, const MallocSite& s2) {
   if (s1.size() == s2.size()) {
     return 0;
   } else if (s1.size() > s2.size()) {
@@ -44,7 +44,7 @@ int compare_malloc_size(const MallocSite& s1, const MallocSite& s2) {
 }
 
 
-int compare_virtual_memory_size(const VirtualMemoryAllocationSite& s1,
+static int compare_virtual_memory_size(const VirtualMemoryAllocationSite& s1,
   const VirtualMemoryAllocationSite& s2) {
   if (s1.reserved() == s2.reserved()) {
     return 0;
@@ -56,12 +56,12 @@ int compare_virtual_memory_size(const VirtualMemoryAllocationSite& s1,
 }
 
 // Sort into allocation site addresses order for baseline comparison
-int compare_malloc_site(const MallocSite& s1, const MallocSite& s2) {
+static int compare_malloc_site(const MallocSite& s1, const MallocSite& s2) {
   return s1.call_stack()->compare(*s2.call_stack());
 }
 
 // Sort into allocation site addresses and memory type order for baseline comparison
-int compare_malloc_site_and_type(const MallocSite& s1, const MallocSite& s2) {
+static int compare_malloc_site_and_type(const MallocSite& s1, const MallocSite& s2) {
   int res = compare_malloc_site(s1, s2);
   if (res == 0) {
     res = (int)(s1.flag() - s2.flag());
@@ -70,7 +70,7 @@ int compare_malloc_site_and_type(const MallocSite& s1, const MallocSite& s2) {
   return res;
 }
 
-int compare_virtual_memory_site(const VirtualMemoryAllocationSite& s1,
+static int compare_virtual_memory_site(const VirtualMemoryAllocationSite& s1,
   const VirtualMemoryAllocationSite& s2) {
   return s1.call_stack()->compare(*s2.call_stack());
 }
@@ -110,7 +110,7 @@ class MallocAllocationSiteWalker : public MallocSiteWalker {
 };
 
 // Compare virtual memory region's base address
-int compare_virtual_memory_base(const ReservedMemoryRegion& r1, const ReservedMemoryRegion& r2) {
+static int compare_virtual_memory_base(const ReservedMemoryRegion& r1, const ReservedMemoryRegion& r2) {
   return r1.compare(r2);
 }
 
@@ -205,7 +205,7 @@ bool MemBaseline::baseline(bool summaryOnly) {
   return true;
 }
 
-int compare_allocation_site(const VirtualMemoryAllocationSite& s1,
+static int compare_allocation_site(const VirtualMemoryAllocationSite& s1,
   const VirtualMemoryAllocationSite& s2) {
   return s1.call_stack()->compare(*s2.call_stack());
 }

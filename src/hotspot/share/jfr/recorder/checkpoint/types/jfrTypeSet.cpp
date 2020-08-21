@@ -199,14 +199,14 @@ static int write_klass(JfrCheckpointWriter* writer, KlassPtr klass, bool leakp) 
   return 1;
 }
 
-int write__klass(JfrCheckpointWriter* writer, const void* k) {
+static int write__klass(JfrCheckpointWriter* writer, const void* k) {
   assert(k != NULL, "invariant");
   KlassPtr klass = (KlassPtr)k;
   set_serialized(klass);
   return write_klass(writer, klass, false);
 }
 
-int write__klass__leakp(JfrCheckpointWriter* writer, const void* k) {
+static int write__klass__leakp(JfrCheckpointWriter* writer, const void* k) {
   assert(k != NULL, "invariant");
   KlassPtr klass = (KlassPtr)k;
   return write_klass(writer, klass, true);
@@ -400,14 +400,14 @@ static int write_package(JfrCheckpointWriter* writer, PkgPtr pkg, bool leakp) {
   return 1;
 }
 
-int write__package(JfrCheckpointWriter* writer, const void* p) {
+static int write__package(JfrCheckpointWriter* writer, const void* p) {
   assert(p != NULL, "invariant");
   PkgPtr pkg = (PkgPtr)p;
   set_serialized(pkg);
   return write_package(writer, pkg, false);
 }
 
-int write__package__leakp(JfrCheckpointWriter* writer, const void* p) {
+static int write__package__leakp(JfrCheckpointWriter* writer, const void* p) {
   assert(p != NULL, "invariant");
   PkgPtr pkg = (PkgPtr)p;
   CLEAR_LEAKP(pkg);
@@ -499,14 +499,14 @@ static int write_module(JfrCheckpointWriter* writer, ModPtr mod, bool leakp) {
   return 1;
 }
 
-int write__module(JfrCheckpointWriter* writer, const void* m) {
+static int write__module(JfrCheckpointWriter* writer, const void* m) {
   assert(m != NULL, "invariant");
   ModPtr mod = (ModPtr)m;
   set_serialized(mod);
   return write_module(writer, mod, false);
 }
 
-int write__module__leakp(JfrCheckpointWriter* writer, const void* m) {
+static int write__module__leakp(JfrCheckpointWriter* writer, const void* m) {
   assert(m != NULL, "invariant");
   ModPtr mod = (ModPtr)m;
   CLEAR_LEAKP(mod);
@@ -605,14 +605,14 @@ static int write_classloader(JfrCheckpointWriter* writer, CldPtr cld, bool leakp
   return 1;
 }
 
-int write__classloader(JfrCheckpointWriter* writer, const void* c) {
+static int write__classloader(JfrCheckpointWriter* writer, const void* c) {
   assert(c != NULL, "invariant");
   CldPtr cld = (CldPtr)c;
   set_serialized(cld);
   return write_classloader(writer, cld, false);
 }
 
-int write__classloader__leakp(JfrCheckpointWriter* writer, const void* c) {
+static int write__classloader__leakp(JfrCheckpointWriter* writer, const void* c) {
   assert(c != NULL, "invariant");
   CldPtr cld = (CldPtr)c;
   CLEAR_LEAKP(cld);
@@ -751,14 +751,14 @@ static int write_method(JfrCheckpointWriter* writer, MethodPtr method, bool leak
   return 1;
 }
 
-int write__method(JfrCheckpointWriter* writer, const void* m) {
+static int write__method(JfrCheckpointWriter* writer, const void* m) {
   assert(m != NULL, "invariant");
   MethodPtr method = (MethodPtr)m;
   set_serialized(method);
   return write_method(writer, method, false);
 }
 
-int write__method__leakp(JfrCheckpointWriter* writer, const void* m) {
+static int write__method__leakp(JfrCheckpointWriter* writer, const void* m) {
   assert(m != NULL, "invariant");
   MethodPtr method = (MethodPtr)m;
   CLEAR_LEAKP_METHOD(method);
@@ -895,14 +895,14 @@ static int write_symbol(JfrCheckpointWriter* writer, SymbolEntryPtr entry, bool 
   return 1;
 }
 
-int write__symbol(JfrCheckpointWriter* writer, const void* e) {
+static int write__symbol(JfrCheckpointWriter* writer, const void* e) {
   assert(e != NULL, "invariant");
   SymbolEntryPtr entry = (SymbolEntryPtr)e;
   set_serialized(entry);
   return write_symbol(writer, entry, false);
 }
 
-int write__symbol__leakp(JfrCheckpointWriter* writer, const void* e) {
+static int write__symbol__leakp(JfrCheckpointWriter* writer, const void* e) {
   assert(e != NULL, "invariant");
   SymbolEntryPtr entry = (SymbolEntryPtr)e;
   return write_symbol(writer, entry, true);
@@ -916,14 +916,14 @@ static int write_cstring(JfrCheckpointWriter* writer, CStringEntryPtr entry, boo
   return 1;
 }
 
-int write__cstring(JfrCheckpointWriter* writer, const void* e) {
+static int write__cstring(JfrCheckpointWriter* writer, const void* e) {
   assert(e != NULL, "invariant");
   CStringEntryPtr entry = (CStringEntryPtr)e;
   set_serialized(entry);
   return write_cstring(writer, entry, false);
 }
 
-int write__cstring__leakp(JfrCheckpointWriter* writer, const void* e) {
+static int write__cstring__leakp(JfrCheckpointWriter* writer, const void* e) {
   assert(e != NULL, "invariant");
   CStringEntryPtr entry = (CStringEntryPtr)e;
   return write_cstring(writer, entry, true);

@@ -106,7 +106,7 @@ traceid JfrThreadId::jfr_id(const Thread* t) {
 }
 
 // caller needs ResourceMark
-const char* get_java_thread_name(const Thread* t) {
+static const char* get_java_thread_name(const Thread* t) {
   assert(t != NULL, "invariant");
   assert(t->is_Java_thread(), "invariant");
   const JavaThread* const jt = ((JavaThread*)t);

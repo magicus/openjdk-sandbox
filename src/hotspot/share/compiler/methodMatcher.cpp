@@ -229,7 +229,7 @@ static MethodMatcher::Mode check_mode(char name[], const char*& error_msg) {
 }
 
 // Skip any leading spaces
-void skip_leading_spaces(char*& line, int* total_bytes_read ) {
+static void skip_leading_spaces(char*& line, int* total_bytes_read ) {
   int bytes_read = 0;
   sscanf(line, "%*[ \t]%n", &bytes_read);
   if (bytes_read > 0) {

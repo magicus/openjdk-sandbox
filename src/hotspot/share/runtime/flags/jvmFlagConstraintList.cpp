@@ -173,19 +173,19 @@ public:
 };
 
 // No constraint emitting
-void emit_constraint_no(...)                            { /* NOP */ }
+static void emit_constraint_no(...)                            { /* NOP */ }
 
 // No constraint emitting if function argument is NOT provided
-void emit_constraint_bool(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_constraint_ccstr(const JVMFlag* /*flag*/)     { /* NOP */ }
-void emit_constraint_ccstrlist(const JVMFlag* /*flag*/) { /* NOP */ }
-void emit_constraint_int(const JVMFlag* /*flag*/)       { /* NOP */ }
-void emit_constraint_intx(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_constraint_uint(const JVMFlag* /*flag*/)      { /* NOP */ }
-void emit_constraint_uintx(const JVMFlag* /*flag*/)     { /* NOP */ }
-void emit_constraint_uint64_t(const JVMFlag* /*flag*/)  { /* NOP */ }
-void emit_constraint_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
-void emit_constraint_double(const JVMFlag* /*flag*/)    { /* NOP */ }
+static void emit_constraint_bool(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_constraint_ccstr(const JVMFlag* /*flag*/)     { /* NOP */ }
+static void emit_constraint_ccstrlist(const JVMFlag* /*flag*/) { /* NOP */ }
+static void emit_constraint_int(const JVMFlag* /*flag*/)       { /* NOP */ }
+static void emit_constraint_intx(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_constraint_uint(const JVMFlag* /*flag*/)      { /* NOP */ }
+static void emit_constraint_uintx(const JVMFlag* /*flag*/)     { /* NOP */ }
+static void emit_constraint_uint64_t(const JVMFlag* /*flag*/)  { /* NOP */ }
+static void emit_constraint_size_t(const JVMFlag* /*flag*/)    { /* NOP */ }
+static void emit_constraint_double(const JVMFlag* /*flag*/)    { /* NOP */ }
 
 // JVMFlagConstraint emitting code functions if function argument is provided
 void emit_constraint_bool(const JVMFlag* flag, JVMFlagConstraintFunc_bool func, JVMFlagConstraint::ConstraintType type) {

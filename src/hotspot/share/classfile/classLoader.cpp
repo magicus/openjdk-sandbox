@@ -149,7 +149,7 @@ ClassPathEntry* ClassLoader::_last_module_path_entry = NULL;
 #endif
 
 // helper routines
-bool string_starts_with(const char* str, const char* str_to_find) {
+static bool string_starts_with(const char* str, const char* str_to_find) {
   size_t str_len = strlen(str);
   size_t str_to_find_len = strlen(str_to_find);
   if (str_to_find_len > str_len) {
@@ -1104,7 +1104,7 @@ const char* ClassLoader::file_name_for_class_name(const char* class_name,
   return file_name;
 }
 
-ClassPathEntry* find_first_module_cpe(ModuleEntry* mod_entry,
+static ClassPathEntry* find_first_module_cpe(ModuleEntry* mod_entry,
                                       const GrowableArray<ModuleClassPathList*>* const module_list) {
   int num_of_entries = module_list->length();
   const Symbol* class_module_name = mod_entry->name();
@@ -1482,7 +1482,7 @@ void ClassLoader::initialize() {
   setup_bootstrap_search_path();
 }
 
-char* lookup_vm_resource(JImageFile *jimage, const char *jimage_version, const char *path) {
+static char* lookup_vm_resource(JImageFile *jimage, const char *jimage_version, const char *path) {
   jlong size;
   JImageLocationRef location = (*JImageFindResource)(jimage, "java.base", jimage_version, path, &size);
   if (location == 0)

@@ -396,7 +396,7 @@ extern Mutex* tty_lock;
 #define EXTRACHARLEN   32
 #define CURRENTAPPX    ".current"
 // convert YYYY-MM-DD HH:MM:SS to YYYY-MM-DD_HH-MM-SS
-char* get_datetime_string(char *buf, size_t len) {
+static char* get_datetime_string(char *buf, size_t len) {
   os::local_time_string(buf, len);
   int i = (int)strlen(buf);
   while (--i >= 0) {

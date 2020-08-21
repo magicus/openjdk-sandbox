@@ -522,7 +522,7 @@ void emit_d32(CodeBuffer &cbuf, int d32) {
 }
 
 // EMIT_D64()
-void emit_d64(CodeBuffer &cbuf, int64_t d64) {
+static void emit_d64(CodeBuffer &cbuf, int64_t d64) {
   cbuf.insts()->emit_int64(d64);
 }
 
@@ -559,13 +559,13 @@ void emit_d32_reloc(CodeBuffer& cbuf, address addr) {
 
 
 // emit 64 bit value and construct relocation entry from relocInfo::relocType
-void emit_d64_reloc(CodeBuffer& cbuf, int64_t d64, relocInfo::relocType reloc, int format) {
+static void emit_d64_reloc(CodeBuffer& cbuf, int64_t d64, relocInfo::relocType reloc, int format) {
   cbuf.relocate(cbuf.insts_mark(), reloc, format);
   cbuf.insts()->emit_int64(d64);
 }
 
 // emit 64 bit value and construct relocation entry from RelocationHolder
-void emit_d64_reloc(CodeBuffer& cbuf, int64_t d64, RelocationHolder const& rspec, int format) {
+static void emit_d64_reloc(CodeBuffer& cbuf, int64_t d64, RelocationHolder const& rspec, int format) {
 #ifdef ASSERT
   if (rspec.reloc()->type() == relocInfo::oop_type &&
       d64 != 0 && d64 != (int64_t) Universe::non_oop_word()) {
@@ -702,7 +702,7 @@ void emit_cmpfp3(MacroAssembler& _masm, Register dst) {
 // je            #
 // |-jz -> a | b # a & b
 // |    -> a     #
-void emit_fp_min_max(MacroAssembler& _masm, XMMRegister dst,
+static void emit_fp_min_max(MacroAssembler& _masm, XMMRegister dst,
                      XMMRegister a, XMMRegister b,
                      XMMRegister xmmt, Register rt,
                      bool min, bool single) {

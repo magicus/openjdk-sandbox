@@ -253,7 +253,7 @@ static void define_javabase_module(Handle module_handle, jstring version, jstrin
 }
 
 // Caller needs ResourceMark.
-void throw_dup_pkg_exception(const char* module_name, PackageEntry* package, TRAPS) {
+static void throw_dup_pkg_exception(const char* module_name, PackageEntry* package, TRAPS) {
   const char* package_name = package->name()->as_C_string();
   if (package->module()->is_named()) {
     THROW_MSG(vmSymbols::java_lang_IllegalStateException(),
