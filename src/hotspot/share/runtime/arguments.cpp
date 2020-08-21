@@ -2329,7 +2329,7 @@ jint Arguments::parse_vm_init_args(const JavaVMInitArgs *vm_options_args,
 // represents a valid JDWP agent.  is_path==true denotes that we
 // are dealing with -agentpath (case where name is a path), otherwise with
 // -agentlib
-static bool valid_jdwp_agent(char *name, bool is_path) {
+bool valid_jdwp_agent(char *name, bool is_path) {
   char *_name;
   const char *_jdwp = "jdwp";
   size_t _len_jdwp, _len_prefix;
