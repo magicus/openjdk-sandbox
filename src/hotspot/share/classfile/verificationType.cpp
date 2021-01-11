@@ -27,8 +27,10 @@
 #include "classfile/systemDictionaryShared.hpp"
 #include "classfile/verificationType.hpp"
 #include "classfile/verifier.hpp"
+#include "classfile/vmSymbols.hpp"
 #include "logging/log.hpp"
 #include "oops/klass.inline.hpp"
+#include "runtime/arguments.hpp"
 #include "runtime/handles.inline.hpp"
 
 VerificationType VerificationType::from_tag(u1 tag) {

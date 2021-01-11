@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016, 2017, SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2017 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@
 #include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
+#include "prims/jvmtiExport.hpp"
 #include "prims/methodHandles.hpp"
 #include "runtime/frame.inline.hpp"
 #include "utilities/preserveException.hpp"
@@ -56,7 +57,7 @@ void MethodHandles::load_klass_from_Class(MacroAssembler* _masm, Register klass_
     verify_klass(_masm, klass_reg, SystemDictionary::WK_KLASS_ENUM_NAME(java_lang_Class),
                  temp_reg, temp2_reg, "MH argument is a Class");
   }
-  __ z_lg(klass_reg, Address(klass_reg, java_lang_Class::klass_offset_in_bytes()));
+  __ z_lg(klass_reg, Address(klass_reg, java_lang_Class::klass_offset()));
 }
 
 
@@ -111,7 +112,7 @@ void MethodHandles::verify_ref_kind(MacroAssembler* _masm, int ref_kind,
 
   __ z_llgf(temp,
             Address(member_reg,
-                    NONZERO(java_lang_invoke_MemberName::flags_offset_in_bytes())));
+                    NONZERO(java_lang_invoke_MemberName::flags_offset())));
   __ z_srl(temp,  java_lang_invoke_MemberName::MN_REFERENCE_KIND_SHIFT);
   __ z_nilf(temp, java_lang_invoke_MemberName::MN_REFERENCE_KIND_MASK);
   __ compare32_and_branch(temp, constant(ref_kind), Assembler::bcondEqual, L);
@@ -198,22 +199,22 @@ void MethodHandles::jump_to_lambda_form(MacroAssembler* _masm,
   __ verify_oop(recv, FILE_AND_LINE);
   __ load_heap_oop(method_temp,
                    Address(recv,
-                           NONZERO(java_lang_invoke_MethodHandle::form_offset_in_bytes())),
+                           NONZERO(java_lang_invoke_MethodHandle::form_offset())),
                    noreg, noreg, IS_NOT_NULL);
   __ verify_oop(method_temp, FILE_AND_LINE);
   __ load_heap_oop(method_temp,
                    Address(method_temp,
-                           NONZERO(java_lang_invoke_LambdaForm::vmentry_offset_in_bytes())),
+                           NONZERO(java_lang_invoke_LambdaForm::vmentry_offset())),
                    noreg, noreg, IS_NOT_NULL);
   __ verify_oop(method_temp, FILE_AND_LINE);
   __ load_heap_oop(method_temp,
                    Address(method_temp,
-                           NONZERO(java_lang_invoke_MemberName::method_offset_in_bytes())),
+                           NONZERO(java_lang_invoke_MemberName::method_offset())),
                    noreg, noreg, IS_NOT_NULL);
   __ verify_oop(method_temp, FILE_AND_LINE);
   __ z_lg(method_temp,
           Address(method_temp,
-                  NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset_in_bytes())));
+                  NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset())));
 
   if (VerifyMethodHandles && !for_compiler_entry) {
     // Make sure recv is already on stack.
@@ -245,6 +246,13 @@ address MethodHandles::generate_method_handle_interpreter_entry(MacroAssembler* 
     // are not directly used. They are linked to Java-generated
     // adapters via MethodHandleNatives.linkMethod. They all allow an
     // appendix argument.
+    __ should_not_reach_here();           // Empty stubs make SG sick.
+    return NULL;
+  }
+
+  // No need in interpreter entry for linkToNative for now.
+  // Interpreter calls compiled entry through i2c.
+  if (iid == vmIntrinsics::_linkToNative) {
     __ should_not_reach_here();           // Empty stubs make SG sick.
     return NULL;
   }
@@ -363,7 +371,10 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
     assert_different_registers(temp1, temp2, temp3, temp4, Z_R10);
   }
 
-  if (iid == vmIntrinsics::_invokeBasic) {
+  if (iid == vmIntrinsics::_invokeBasic || iid == vmIntrinsics::_linkToNative) {
+    if (iid == vmIntrinsics::_linkToNative) {
+      assert(for_compiler_entry, "only compiler entry is supported");
+    }
     __ pc(); // Just for the block comment.
     // Indirect through MH.form.vmentry.vmtarget.
     jump_to_lambda_form(_masm, receiver_reg, Z_method, Z_R1, temp3, for_compiler_entry);
@@ -379,10 +390,10 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
                  "MemberName required for invokeVirtual etc.");
   }
 
-  Address  member_clazz(   member_reg, NONZERO(java_lang_invoke_MemberName::clazz_offset_in_bytes()));
-  Address  member_vmindex( member_reg, NONZERO(java_lang_invoke_MemberName::vmindex_offset_in_bytes()));
-  Address  member_vmtarget(member_reg, NONZERO(java_lang_invoke_MemberName::method_offset_in_bytes()));
-  Address  vmtarget_method(Z_method, NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset_in_bytes()));
+  Address  member_clazz(   member_reg, NONZERO(java_lang_invoke_MemberName::clazz_offset()));
+  Address  member_vmindex( member_reg, NONZERO(java_lang_invoke_MemberName::vmindex_offset()));
+  Address  member_vmtarget(member_reg, NONZERO(java_lang_invoke_MemberName::method_offset()));
+  Address  vmtarget_method(Z_method, NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset()));
   Register temp1_recv_klass = temp1;
 
   if (iid != vmIntrinsics::_linkToStatic) {
@@ -521,7 +532,7 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
     }
 
     default:
-      fatal("unexpected intrinsic %d: %s", iid, vmIntrinsics::name_at(iid));
+      fatal("unexpected intrinsic %d: %s", vmIntrinsics::as_int(iid), vmIntrinsics::name_at(iid));
       break;
   }
 
@@ -608,9 +619,7 @@ void trace_method_handle_stub(const char* adaptername,
     if (has_mh && oopDesc::is_oop(mh)) {
       mh->print();
       if (java_lang_invoke_MethodHandle::is_instance(mh)) {
-        if (java_lang_invoke_MethodHandle::form_offset_in_bytes() != 0) {
-          java_lang_invoke_MethodHandle::form(mh)->print();
-        }
+        java_lang_invoke_MethodHandle::form(mh)->print();
       }
     }
   }

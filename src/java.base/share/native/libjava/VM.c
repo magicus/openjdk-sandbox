@@ -55,14 +55,3 @@ JNIEXPORT jobjectArray JNICALL
 Java_jdk_internal_misc_VM_getRuntimeArguments(JNIEnv *env, jclass cls) {
     return JVM_GetVmArguments(env);
 }
-
-JNIEXPORT void JNICALL
-Java_jdk_internal_misc_VM_initializeFromArchive(JNIEnv *env, jclass ignore,
-                                                jclass c) {
-    JVM_InitializeFromArchive(env, c);
-}
-
-JNIEXPORT jlong JNICALL
-Java_jdk_internal_misc_VM_getRandomSeedForCDSDump(JNIEnv *env, jclass ignore) {
-    return JVM_GetRandomSeedForCDSDump();
-}

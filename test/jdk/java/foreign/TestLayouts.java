@@ -26,15 +26,13 @@
  * @run testng TestLayouts
  */
 
-import jdk.incubator.foreign.MemoryLayouts;
-import jdk.incubator.foreign.MemoryLayout;
+import jdk.incubator.foreign.*;
 
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.function.LongFunction;
+import java.util.stream.Stream;
 
-import jdk.incubator.foreign.MemorySegment;
-import jdk.incubator.foreign.SequenceLayout;
 import org.testng.annotations.*;
 import static org.testng.Assert.*;
 
@@ -63,14 +61,14 @@ public class TestLayouts {
                 MemoryLayout.PathElement.sequenceElement());
         try (MemorySegment segment = MemorySegment.allocateNative(
                 layout.map(l -> ((SequenceLayout)l).withElementCount(4), MemoryLayout.PathElement.groupElement("arr")))) {
-            size_handle.set(segment.baseAddress(), 4);
+            size_handle.set(segment, 4);
             for (int i = 0 ; i < 4 ; i++) {
-                array_elem_handle.set(segment.baseAddress(), i, (double)i);
+                array_elem_handle.set(segment, i, (double)i);
             }
             //check
-            assertEquals(4, (int)size_handle.get(segment.baseAddress()));
+            assertEquals(4, (int)size_handle.get(segment));
             for (int i = 0 ; i < 4 ; i++) {
-                assertEquals((double)i, (double)array_elem_handle.get(segment.baseAddress(), i));
+                assertEquals((double)i, (double)array_elem_handle.get(segment, i));
             }
         }
     }
@@ -89,14 +87,14 @@ public class TestLayouts {
                 MemoryLayout.PathElement.sequenceElement());
         try (MemorySegment segment = MemorySegment.allocateNative(
                 layout.map(l -> ((SequenceLayout)l).withElementCount(4), MemoryLayout.PathElement.groupElement("arr"), MemoryLayout.PathElement.sequenceElement()))) {
-            size_handle.set(segment.baseAddress(), 4);
+            size_handle.set(segment, 4);
             for (int i = 0 ; i < 4 ; i++) {
-                array_elem_handle.set(segment.baseAddress(), i, (double)i);
+                array_elem_handle.set(segment, i, (double)i);
             }
             //check
-            assertEquals(4, (int)size_handle.get(segment.baseAddress()));
+            assertEquals(4, (int)size_handle.get(segment));
             for (int i = 0 ; i < 4 ; i++) {
-                assertEquals((double)i, (double)array_elem_handle.get(segment.baseAddress(), i));
+                assertEquals((double)i, (double)array_elem_handle.get(segment, i));
             }
         }
     }
@@ -108,13 +106,13 @@ public class TestLayouts {
             VarHandle indexHandle = seq.varHandle(int.class, MemoryLayout.PathElement.sequenceElement());
             // init segment
             for (int i = 0 ; i < 10 ; i++) {
-                indexHandle.set(segment.baseAddress(), (long)i, i);
+                indexHandle.set(segment, (long)i, i);
             }
             //check statically indexed handles
             for (int i = 0 ; i < 10 ; i++) {
                 VarHandle preindexHandle = seq.varHandle(int.class, MemoryLayout.PathElement.sequenceElement(i));
-                int expected = (int)indexHandle.get(segment.baseAddress(), (long)i);
-                int found = (int)preindexHandle.get(segment.baseAddress());
+                int expected = (int)indexHandle.get(segment, (long)i);
+                int found = (int)preindexHandle.get(segment);
                 assertEquals(expected, found);
             }
         }
@@ -173,7 +171,26 @@ public class TestLayouts {
                 MemoryLayouts.JAVA_LONG
         );
         assertEquals(struct.byteSize(), 1 + 1 + 2 + 4 + 8);
-        assertEquals(struct.byteAlignment(), 8);
+        assertEquals(struct.byteAlignment(), MemoryLayouts.ADDRESS.byteAlignment());
+    }
+
+    @Test(dataProvider="basicLayouts")
+    public void testPaddingNoAlign(MemoryLayout layout) {
+        assertEquals(MemoryLayout.ofPaddingBits(layout.bitSize()).bitAlignment(), 1);
+    }
+
+    @Test(dataProvider="basicLayouts")
+    public void testStructPaddingAndAlign(MemoryLayout layout) {
+        MemoryLayout struct = MemoryLayout.ofStruct(
+                layout, MemoryLayout.ofPaddingBits(128 - layout.bitSize()));
+        assertEquals(struct.bitAlignment(), layout.bitAlignment());
+    }
+
+    @Test(dataProvider="basicLayouts")
+    public void testUnionPaddingAndAlign(MemoryLayout layout) {
+        MemoryLayout struct = MemoryLayout.ofUnion(
+                layout, MemoryLayout.ofPaddingBits(128 - layout.bitSize()));
+        assertEquals(struct.bitAlignment(), layout.bitAlignment());
     }
 
     @Test
@@ -185,15 +202,22 @@ public class TestLayouts {
                 MemoryLayouts.JAVA_LONG
         );
         assertEquals(struct.byteSize(), 8);
-        assertEquals(struct.byteAlignment(), 8);
+        assertEquals(struct.byteAlignment(), MemoryLayouts.ADDRESS.byteAlignment());
+    }
+
+    @Test(dataProvider = "layoutKinds")
+    public void testPadding(LayoutKind kind) {
+        assertEquals(kind == LayoutKind.PADDING, kind.layout.isPadding());
     }
 
     @Test(dataProvider="layoutsAndAlignments")
     public void testAlignmentString(MemoryLayout layout, long bitAlign) {
         long[] alignments = { 8, 16, 32, 64, 128 };
         for (long a : alignments) {
-            assertFalse(layout.toString().contains("%"));
-            assertEquals(layout.withBitAlignment(a).toString().contains("%"), a != bitAlign);
+            if (layout.bitAlignment() == layout.bitSize()) {
+                assertFalse(layout.toString().contains("%"));
+                assertEquals(layout.withBitAlignment(a).toString().contains("%"), a != bitAlign);
+            }
         }
     }
 
@@ -236,6 +260,13 @@ public class TestLayouts {
         return values;
     }
 
+    @DataProvider(name = "layoutKinds")
+    public Object[][] layoutsKinds() {
+        return Stream.of(LayoutKind.values())
+                .map(lk -> new Object[] { lk })
+                .toArray(Object[][]::new);
+    }
+
     enum SizedLayoutFactory {
         VALUE_LE(size -> MemoryLayout.ofValueBits(size, ByteOrder.LITTLE_ENDIAN)),
         VALUE_BE(size -> MemoryLayout.ofValueBits(size, ByteOrder.BIG_ENDIAN)),
@@ -268,26 +299,20 @@ public class TestLayouts {
         }
     }
 
+    @DataProvider(name = "basicLayouts")
+    public Object[][] basicLayouts() {
+        return Stream.of(basicLayouts)
+                .map(l -> new Object[] { l })
+                .toArray(Object[][]::new);
+    }
+
     @DataProvider(name = "layoutsAndAlignments")
     public Object[][] layoutsAndAlignments() {
-        MemoryLayout[] basicLayouts = {
-                MemoryLayouts.JAVA_BYTE,
-                MemoryLayouts.JAVA_CHAR,
-                MemoryLayouts.JAVA_SHORT,
-                MemoryLayouts.JAVA_INT,
-                MemoryLayouts.JAVA_FLOAT,
-                MemoryLayouts.JAVA_LONG,
-                MemoryLayouts.JAVA_DOUBLE,
-        };
-        Object[][] layoutsAndAlignments = new Object[basicLayouts.length * 5][];
+        Object[][] layoutsAndAlignments = new Object[basicLayouts.length * 4][];
         int i = 0;
         //add basic layouts
         for (MemoryLayout l : basicLayouts) {
             layoutsAndAlignments[i++] = new Object[] { l, l.bitAlignment() };
-        }
-        //add basic layouts wrapped in a sequence with unspecified size
-        for (MemoryLayout l : basicLayouts) {
-            layoutsAndAlignments[i++] = new Object[] { MemoryLayout.ofSequence(l), l.bitAlignment() };
         }
         //add basic layouts wrapped in a sequence with given size
         for (MemoryLayout l : basicLayouts) {
@@ -303,4 +328,14 @@ public class TestLayouts {
         }
         return layoutsAndAlignments;
     }
+
+    static MemoryLayout[] basicLayouts = {
+            MemoryLayouts.JAVA_BYTE,
+            MemoryLayouts.JAVA_CHAR,
+            MemoryLayouts.JAVA_SHORT,
+            MemoryLayouts.JAVA_INT,
+            MemoryLayouts.JAVA_FLOAT,
+            MemoryLayouts.JAVA_LONG,
+            MemoryLayouts.JAVA_DOUBLE,
+    };
 }

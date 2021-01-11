@@ -138,10 +138,10 @@ module java.base {
         jdk.incubator.foreign;
     exports com.sun.security.ntlm to
         java.security.sasl;
-    exports jdk.internal to
+    exports jdk.internal to // for @HotSpotIntrinsicCandidate
         java.compiler,
-        jdk.jfr,
         jdk.compiler,
+        jdk.incubator.vector,
         jdk.jshell;
     exports jdk.internal.access to
         java.desktop,
@@ -149,6 +149,7 @@ module java.base {
         java.management,
         java.naming,
         java.rmi,
+        jdk.jartool,
         jdk.jlink,
         jdk.net,
         jdk.incubator.foreign;
@@ -163,7 +164,8 @@ module java.base {
     exports jdk.internal.loader to
         java.instrument,
         java.logging,
-        java.naming;
+        java.naming,
+        jdk.incubator.foreign;
     exports jdk.internal.jmod to
         jdk.compiler,
         jdk.jlink;
@@ -192,10 +194,10 @@ module java.base {
         java.net.http,
         java.rmi,
         java.security.jgss,
-        java.xml,
         jdk.attach,
         jdk.charsets,
         jdk.compiler,
+        jdk.incubator.vector,
         jdk.jfr,
         jdk.jshell,
         jdk.nio.mapmode,
@@ -208,7 +210,7 @@ module java.base {
         jdk.jartool,
         jdk.jfr,
         jdk.jlink,
-        jdk.incubator.jpackage;
+        jdk.jpackage;
     exports jdk.internal.perf to
         java.management,
         jdk.management.agent,
@@ -216,7 +218,8 @@ module java.base {
     exports jdk.internal.platform to
         jdk.management;
     exports jdk.internal.ref to
-        java.desktop;
+        java.desktop,
+        jdk.incubator.foreign;
     exports jdk.internal.reflect to
         java.logging,
         java.sql,
@@ -228,8 +231,16 @@ module java.base {
         jdk.internal.jvmstat,
         jdk.management.agent;
     exports jdk.internal.vm.annotation to
+        java.instrument,
         jdk.internal.vm.ci,
+        jdk.incubator.vector,
+        jdk.incubator.foreign,
+        jdk.jfr,
         jdk.unsupported;
+    exports jdk.internal.vm.vector to
+        jdk.incubator.vector;
+    exports jdk.internal.util to
+            jdk.incubator.foreign;
     exports jdk.internal.util.jar to
         jdk.jartool;
     exports jdk.internal.util.xml to
@@ -262,6 +273,8 @@ module java.base {
         jdk.incubator.foreign;
     exports sun.nio.cs to
         jdk.charsets;
+    exports sun.nio.fs to
+        jdk.net;
     exports sun.reflect.annotation to
         jdk.compiler;
     exports sun.reflect.generics.reflectiveObjects to
@@ -339,6 +352,8 @@ module java.base {
         java.prefs;
     exports sun.util.resources to
         jdk.localedata;
+    exports jdk.internal.invoke to
+        jdk.incubator.foreign;
 
 
     // the service types defined by the APIs in this module

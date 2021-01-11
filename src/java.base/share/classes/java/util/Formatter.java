@@ -277,7 +277,7 @@ import sun.util.locale.provider.ResourceBundleBasedAdapter;
  *
  * </ol>
  *
- * <p> For category <i>General</i>, <i>Character</i>, <i>Numberic</i>,
+ * <p> For category <i>General</i>, <i>Character</i>, <i>Numeric</i>,
  * <i>Integral</i> and <i>Date/Time</i> conversion, unless otherwise specified,
  * if the argument <i>arg</i> is {@code null}, then the result is "{@code null}".
  *
@@ -692,18 +692,34 @@ import sun.util.locale.provider.ResourceBundleBasedAdapter;
  * <p> If the format specifier contains a width or precision with an invalid
  * value or which is otherwise unsupported, then a {@link
  * IllegalFormatWidthException} or {@link IllegalFormatPrecisionException}
- * respectively will be thrown.
+ * respectively will be thrown. Similarly, values of zero for an argument
+ * index will result in an {@link IllegalFormatException}.
  *
  * <p> If a format specifier contains a conversion character that is not
  * applicable to the corresponding argument, then an {@link
  * IllegalFormatConversionException} will be thrown.
+ *
+ * <p> Values of <i>precision</i> must be in the range zero to
+ * {@link Integer#MAX_VALUE}, inclusive, otherwise
+ * {@link IllegalFormatPrecisionException} is thrown.</p>
+ *
+ * <p> Values of <i>width</i> must be in the range one to
+ * {@link Integer#MAX_VALUE}, inclusive, otherwise
+ * {@link IllegalFormatWidthException} will be thrown
+ * Note that widths can appear to have a negative value, but the negative sign
+ * is a <i>flag</i>. For example in the format string {@code "%-20s"} the
+ * <i>width</i> is <i>20</i> and the <i>flag</i> is "-".</p>
+ *
+ * <p> Values of <i>index</i> must be in the range one to
+ * {@link Integer#MAX_VALUE}, inclusive, otherwise
+ * {@link IllegalFormatException} will be thrown.</p>
  *
  * <p> All specified exceptions may be thrown by any of the {@code format}
  * methods of {@code Formatter} as well as by any {@code format} convenience
  * methods such as {@link String#format(String,Object...) String.format} and
  * {@link java.io.PrintStream#printf(String,Object...) PrintStream.printf}.
  *
- * <p> For category <i>General</i>, <i>Character</i>, <i>Numberic</i>,
+ * <p> For category <i>General</i>, <i>Character</i>, <i>Numeric</i>,
  * <i>Integral</i> and <i>Date/Time</i> conversion, unless otherwise specified,
  * if the argument <i>arg</i> is {@code null}, then the result is "{@code null}".
  *
@@ -1898,7 +1914,7 @@ import sun.util.locale.provider.ResourceBundleBasedAdapter;
  *
  * <p> The maximum number of arguments is limited by the maximum dimension of a
  * Java array as defined by
- * <cite>The Java&trade; Virtual Machine Specification</cite>.
+ * <cite>The Java Virtual Machine Specification</cite>.
  * If the argument index does not correspond to an
  * available argument, then a {@link MissingFormatArgumentException} is thrown.
  *
@@ -2589,7 +2605,7 @@ public final class Formatter implements Closeable, Flushable {
      *         string.  If there are more arguments than format specifiers, the
      *         extra arguments are ignored.  The maximum number of arguments is
      *         limited by the maximum dimension of a Java array as defined by
-     *         <cite>The Java&trade; Virtual Machine Specification</cite>.
+     *         <cite>The Java Virtual Machine Specification</cite>.
      *
      * @throws  IllegalFormatException
      *          If a format string contains an illegal syntax, a format
@@ -2628,7 +2644,7 @@ public final class Formatter implements Closeable, Flushable {
      *         string.  If there are more arguments than format specifiers, the
      *         extra arguments are ignored.  The maximum number of arguments is
      *         limited by the maximum dimension of a Java array as defined by
-     *         <cite>The Java&trade; Virtual Machine Specification</cite>.
+     *         <cite>The Java Virtual Machine Specification</cite>.
      *
      * @throws  IllegalFormatException
      *          If a format string contains an illegal syntax, a format
@@ -2783,8 +2799,11 @@ public final class Formatter implements Closeable, Flushable {
                 try {
                     // skip the trailing '$'
                     index = Integer.parseInt(s, start, end - 1, 10);
+                    if (index <= 0) {
+                       throw new IllegalFormatArgumentIndexException(index);
+                    }
                 } catch (NumberFormatException x) {
-                    assert(false);
+                    throw new IllegalFormatArgumentIndexException(Integer.MIN_VALUE);
                 }
             } else {
                 index = 0;
@@ -2811,7 +2830,7 @@ public final class Formatter implements Closeable, Flushable {
                     if (width < 0)
                         throw new IllegalFormatWidthException(width);
                 } catch (NumberFormatException x) {
-                    assert(false);
+                    throw new IllegalFormatWidthException(Integer.MIN_VALUE);
                 }
             }
             return width;
@@ -2826,7 +2845,7 @@ public final class Formatter implements Closeable, Flushable {
                     if (precision < 0)
                         throw new IllegalFormatPrecisionException(precision);
                 } catch (NumberFormatException x) {
-                    assert(false);
+                    throw new IllegalFormatPrecisionException(Integer.MIN_VALUE);
                 }
             }
             return precision;

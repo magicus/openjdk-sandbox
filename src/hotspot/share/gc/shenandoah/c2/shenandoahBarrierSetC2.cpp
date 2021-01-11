@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/javaClasses.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shenandoah/shenandoahBarrierSet.hpp"
 #include "gc/shenandoah/shenandoahForwarding.hpp"
@@ -65,9 +66,7 @@ void ShenandoahBarrierSetC2State::add_enqueue_barrier(ShenandoahEnqueueBarrierNo
 }
 
 void ShenandoahBarrierSetC2State::remove_enqueue_barrier(ShenandoahEnqueueBarrierNode * n) {
-  if (_enqueue_barriers->contains(n)) {
-    _enqueue_barriers->remove(n);
-  }
+  _enqueue_barriers->remove_if_existing(n);
 }
 
 int ShenandoahBarrierSetC2State::load_reference_barriers_count() const {
@@ -304,9 +303,11 @@ bool ShenandoahBarrierSetC2::is_shenandoah_lrb_call(Node* call) {
   }
 
   address entry_point = call->as_CallLeaf()->entry_point();
-  return (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier)) ||
-         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_narrow)) ||
-         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_native));
+  return (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_strong)) ||
+         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_strong_narrow)) ||
+         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_weak)) ||
+         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_weak_narrow)) ||
+         (entry_point == CAST_FROM_FN_PTR(address, ShenandoahRuntime::load_reference_barrier_phantom));
 }
 
 bool ShenandoahBarrierSetC2::is_shenandoah_marking_if(PhaseTransform *phase, Node* n) {
@@ -375,7 +376,7 @@ void ShenandoahBarrierSetC2::insert_pre_barrier(GraphKit* kit, Node* base_oop, N
   // If offset is a constant, is it java_lang_ref_Reference::_reference_offset?
   const TypeX* otype = offset->find_intptr_t_type();
   if (otype != NULL && otype->is_con() &&
-      otype->get_con() != java_lang_ref_Reference::referent_offset) {
+      otype->get_con() != java_lang_ref_Reference::referent_offset()) {
     // Constant offset but not the reference_offset so just return
     return;
   }
@@ -415,7 +416,7 @@ void ShenandoahBarrierSetC2::insert_pre_barrier(GraphKit* kit, Node* base_oop, N
 
   IdealKit ideal(kit);
 
-  Node* referent_off = __ ConX(java_lang_ref_Reference::referent_offset);
+  Node* referent_off = __ ConX(java_lang_ref_Reference::referent_offset());
 
   __ if_then(offset, BoolTest::eq, referent_off, unlikely); {
       // Update graphKit memory and control from IdealKit.
@@ -546,9 +547,7 @@ Node* ShenandoahBarrierSetC2::load_at_resolved(C2Access& access, const Type* val
 
   // 2: apply LRB if needed
   if (ShenandoahBarrierSet::need_load_reference_barrier(decorators, type)) {
-    load = new ShenandoahLoadReferenceBarrierNode(NULL,
-                                                  load,
-                                                  ShenandoahBarrierSet::use_load_reference_barrier_native(decorators, type));
+    load = new ShenandoahLoadReferenceBarrierNode(NULL, load, decorators);
     if (access.is_parse_access()) {
       load = static_cast<C2ParseAccess &>(access).kit()->gvn().transform(load);
     } else {
@@ -645,7 +644,7 @@ Node* ShenandoahBarrierSetC2::atomic_cmpxchg_val_at_resolved(C2AtomicParseAccess
       load_store = kit->gvn().transform(new DecodeNNode(load_store, load_store->get_ptr_type()));
     }
 #endif
-    load_store = kit->gvn().transform(new ShenandoahLoadReferenceBarrierNode(NULL, load_store, false));
+    load_store = kit->gvn().transform(new ShenandoahLoadReferenceBarrierNode(NULL, load_store, access.decorators()));
     return load_store;
   }
   return BarrierSetC2::atomic_cmpxchg_val_at_resolved(access, expected_val, new_val, value_type);
@@ -713,7 +712,7 @@ Node* ShenandoahBarrierSetC2::atomic_xchg_at_resolved(C2AtomicParseAccess& acces
   }
   Node* result = BarrierSetC2::atomic_xchg_at_resolved(access, val, value_type);
   if (access.is_oop()) {
-    result = kit->gvn().transform(new ShenandoahLoadReferenceBarrierNode(NULL, result, false));
+    result = kit->gvn().transform(new ShenandoahLoadReferenceBarrierNode(NULL, result, access.decorators()));
     shenandoah_write_barrier_pre(kit, false /* do_load */,
                                  NULL, NULL, max_juint, NULL, NULL,
                                  result /* pre_val */, T_OBJECT);
@@ -986,9 +985,8 @@ void ShenandoahBarrierSetC2::verify_gc_barriers(Compile* compile, CompilePhase p
     // Verify G1 pre-barriers
     const int marking_offset = in_bytes(ShenandoahThreadLocalData::satb_mark_queue_active_offset());
 
-    ResourceArea *area = Thread::current()->resource_area();
-    Unique_Node_List visited(area);
-    Node_List worklist(area);
+    Unique_Node_List visited;
+    Node_List worklist;
     // We're going to walk control flow backwards starting from the Root
     worklist.push(compile->root());
     while (worklist.size() > 0) {
@@ -1061,12 +1059,19 @@ Node* ShenandoahBarrierSetC2::ideal_node(PhaseGVN* phase, Node* n, bool can_resh
   if (n->Opcode() == Op_CmpP) {
     Node* in1 = n->in(1);
     Node* in2 = n->in(2);
-    if (in1->bottom_type() == TypePtr::NULL_PTR) {
+
+    // If one input is NULL, then step over the strong LRB barriers on the other input
+    if (in1->bottom_type() == TypePtr::NULL_PTR &&
+        !((in2->Opcode() == Op_ShenandoahLoadReferenceBarrier) &&
+          !ShenandoahBarrierSet::is_strong_access(((ShenandoahLoadReferenceBarrierNode*)in2)->decorators()))) {
       in2 = step_over_gc_barrier(in2);
     }
-    if (in2->bottom_type() == TypePtr::NULL_PTR) {
+    if (in2->bottom_type() == TypePtr::NULL_PTR &&
+        !((in1->Opcode() == Op_ShenandoahLoadReferenceBarrier) &&
+          !ShenandoahBarrierSet::is_strong_access(((ShenandoahLoadReferenceBarrierNode*)in1)->decorators()))) {
       in1 = step_over_gc_barrier(in1);
     }
+
     PhaseIterGVN* igvn = phase->is_IterGVN();
     if (in1 != n->in(1)) {
       if (igvn != NULL) {
@@ -1149,16 +1154,6 @@ bool ShenandoahBarrierSetC2::final_graph_reshaping(Compile* compile, Node* n, ui
     case Op_ShenandoahWeakCompareAndSwapP:
     case Op_ShenandoahCompareAndExchangeP:
     case Op_ShenandoahCompareAndExchangeN:
-#ifdef ASSERT
-      if( VerifyOptoOopOffsets ) {
-        MemNode* mem  = n->as_Mem();
-        // Check to see if address types have grounded out somehow.
-        const TypeInstPtr *tp = mem->in(MemNode::Address)->bottom_type()->isa_instptr();
-        ciInstanceKlass *k = tp->klass()->as_instance_klass();
-        bool oop_offset_is_sane = k->contains_field_offset(tp->offset());
-        assert( !tp || oop_offset_is_sane, "" );
-      }
-#endif
       return true;
     case Op_ShenandoahLoadReferenceBarrier:
       assert(false, "should have been expanded already");

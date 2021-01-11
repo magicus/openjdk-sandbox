@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2005, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -60,7 +60,12 @@ import java.rmi.activation.UnknownObjectException;
  * @see         ActivationGroupDesc
  * @see         ActivationGroupID
  * @since       1.2
+ * @deprecated
+ * See the <a href="{@docRoot}/java.rmi/java/rmi/activation/package-summary.html">
+ * {@code java.rmi.activation}</a> package specification for further information.
  */
+@Deprecated(forRemoval=true, since="15")
+@SuppressWarnings("removal")
 public interface Activator extends Remote {
     /**
      * Activate the object associated with the activation identifier,
@@ -102,9 +107,9 @@ public interface Activator extends Remote {
      * the remote object's reference; if false, returning the cached value
      * is allowed.
      * @return the remote object (a stub) in a marshalled form
-     * @exception ActivationException if object activation fails
-     * @exception UnknownObjectException if object is unknown (not registered)
-     * @exception RemoteException if remote call fails
+     * @throws ActivationException if object activation fails
+     * @throws UnknownObjectException if object is unknown (not registered)
+     * @throws RemoteException if remote call fails
      * @since 1.2
      */
     public MarshalledObject<? extends Remote> activate(ActivationID id,

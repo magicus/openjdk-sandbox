@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -286,11 +286,21 @@ public final class Utils {
     }
 
     public static Throwable getCompletionCause(Throwable x) {
-        if (!(x instanceof CompletionException)
-                && !(x instanceof ExecutionException)) return x;
-        final Throwable cause = x.getCause();
-        if (cause == null) {
+        Throwable cause = x;
+        while ((cause instanceof CompletionException)
+                || (cause instanceof ExecutionException)) {
+            cause = cause.getCause();
+        }
+        if (cause == null && cause != x) {
             throw new InternalError("Unexpected null cause", x);
+        }
+        return cause;
+    }
+
+    public static Throwable getCancelCause(Throwable x) {
+        Throwable cause = getCompletionCause(x);
+        if (cause instanceof ConnectionExpiredException) {
+            cause = cause.getCause();
         }
         return cause;
     }
@@ -390,7 +400,7 @@ public final class Utils {
         for (char c : allowedTokenChars) {
             tchar[c] = true;
         }
-        for (char c = 0x21; c < 0xFF; c++) {
+        for (char c = 0x21; c <= 0xFF; c++) {
             fieldvchar[c] = true;
         }
         fieldvchar[0x7F] = false; // a little hole (DEL) in the range

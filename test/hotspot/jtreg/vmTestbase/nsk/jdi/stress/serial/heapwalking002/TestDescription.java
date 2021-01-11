@@ -39,7 +39,11 @@
  *
  * @library /vmTestbase
  *          /test/lib
- * @run driver jdk.test.lib.FileInstaller . .
+ * @comment some of the tests from heapwalking002.tests need WhiteBox
+ * @modules java.base/jdk.internal.misc:+open
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *
  *
  * @comment build classes required for tests from heapwalking002.tests
  * @build nsk.jdi.ObjectReference.referringObjects.referringObjects003.referringObjects003
@@ -53,16 +57,17 @@
  *        nsk.share.jdi.TestInterfaceImplementer1
  *
  * @build nsk.share.jdi.SerialExecutionDebugger
- * @run main/othervm/native PropertyResolvingWrapper
+ * @run main/othervm/native
  *      nsk.share.jdi.SerialExecutionDebugger
  *      -verbose
  *      -arch=${os.family}-${os.simpleArch}
  *      -waittime=5
  *      -debugee.vmkind=java
  *      -transport.address=dynamic
- *      "-debugee.vmkeys=-Xmx256M ${test.vm.opts} ${test.java.opts}"
+ *      -debugee.vmkeys="-Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                       -XX:+WhiteBoxAPI -Xmx256M ${test.vm.opts} ${test.java.opts}"
  *      -testClassPath ${test.class.path}
- *      -configFile ./heapwalking002.tests
+ *      -configFile ${test.src}/heapwalking002.tests
  *      -testWorkDir .
  */
 

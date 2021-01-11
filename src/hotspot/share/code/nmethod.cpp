@@ -50,6 +50,7 @@
 #include "oops/oop.inline.hpp"
 #include "prims/jvmtiImpl.hpp"
 #include "prims/jvmtiThreadState.hpp"
+#include "prims/methodHandles.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/flags/flagSetting.hpp"
@@ -64,8 +65,10 @@
 #include "runtime/sweeper.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/align.hpp"
+#include "utilities/copy.hpp"
 #include "utilities/dtrace.hpp"
 #include "utilities/events.hpp"
+#include "utilities/globalDefinitions.hpp"
 #include "utilities/resourceHash.hpp"
 #include "utilities/xmlstream.hpp"
 #if INCLUDE_JVMCI
@@ -495,7 +498,8 @@ nmethod* nmethod::new_nmethod(const methodHandle& method,
   ExceptionHandlerTable* handler_table,
   ImplicitExceptionTable* nul_chk_table,
   AbstractCompiler* compiler,
-  int comp_level
+  int comp_level,
+  const GrowableArrayView<BufferBlob*>& native_invokers
 #if INCLUDE_JVMCI
   , char* speculations,
   int speculations_len,
@@ -517,6 +521,7 @@ nmethod* nmethod::new_nmethod(const methodHandle& method,
       CodeBlob::allocation_size(code_buffer, sizeof(nmethod))
       + adjust_pcs_size(debug_info->pcs_size())
       + align_up((int)dependencies->size_in_bytes(), oopSize)
+      + align_up(checked_cast<int>(native_invokers.data_size_in_bytes()), oopSize)
       + align_up(handler_table->size_in_bytes()    , oopSize)
       + align_up(nul_chk_table->size_in_bytes()    , oopSize)
 #if INCLUDE_JVMCI
@@ -532,7 +537,8 @@ nmethod* nmethod::new_nmethod(const methodHandle& method,
             handler_table,
             nul_chk_table,
             compiler,
-            comp_level
+            comp_level,
+            native_invokers
 #if INCLUDE_JVMCI
             , speculations,
             speculations_len,
@@ -620,7 +626,8 @@ nmethod::nmethod(
     scopes_data_offset       = _metadata_offset     + align_up(code_buffer->total_metadata_size(), wordSize);
     _scopes_pcs_offset       = scopes_data_offset;
     _dependencies_offset     = _scopes_pcs_offset;
-    _handler_table_offset    = _dependencies_offset;
+    _native_invokers_offset     = _dependencies_offset;
+    _handler_table_offset    = _native_invokers_offset;
     _nul_chk_table_offset    = _handler_table_offset;
 #if INCLUDE_JVMCI
     _speculations_offset     = _nul_chk_table_offset;
@@ -716,7 +723,8 @@ nmethod::nmethod(
   ExceptionHandlerTable* handler_table,
   ImplicitExceptionTable* nul_chk_table,
   AbstractCompiler* compiler,
-  int comp_level
+  int comp_level,
+  const GrowableArrayView<BufferBlob*>& native_invokers
 #if INCLUDE_JVMCI
   , char* speculations,
   int speculations_len,
@@ -793,7 +801,8 @@ nmethod::nmethod(
 
     _scopes_pcs_offset       = scopes_data_offset    + align_up(debug_info->data_size       (), oopSize);
     _dependencies_offset     = _scopes_pcs_offset    + adjust_pcs_size(debug_info->pcs_size());
-    _handler_table_offset    = _dependencies_offset  + align_up((int)dependencies->size_in_bytes (), oopSize);
+    _native_invokers_offset  = _dependencies_offset  + align_up((int)dependencies->size_in_bytes(), oopSize);
+    _handler_table_offset    = _native_invokers_offset + align_up(checked_cast<int>(native_invokers.data_size_in_bytes()), oopSize);
     _nul_chk_table_offset    = _handler_table_offset + align_up(handler_table->size_in_bytes(), oopSize);
 #if INCLUDE_JVMCI
     _speculations_offset     = _nul_chk_table_offset + align_up(nul_chk_table->size_in_bytes(), oopSize);
@@ -815,6 +824,10 @@ nmethod::nmethod(
     code_buffer->copy_values_to(this);
     debug_info->copy_to(this);
     dependencies->copy_to(this);
+    if (native_invokers.is_nonempty()) { // can not get address of zero-length array
+      // Copy native stubs
+      memcpy(native_invokers_begin(), native_invokers.adr_at(0), native_invokers.data_size_in_bytes());
+    }
     clear_unloading_state();
 
     Universe::heap()->register_nmethod(this);
@@ -873,7 +886,6 @@ void nmethod::log_identity(xmlStream* log) const {
 void nmethod::log_new_nmethod() const {
   if (LogCompilation && xtty != NULL) {
     ttyLocker ttyl;
-    HandleMark hm;
     xtty->begin_elem("nmethod");
     log_identity(xtty);
     xtty->print(" entry='" INTPTR_FORMAT "' size='%d'", p2i(code_begin()), size());
@@ -931,7 +943,6 @@ void nmethod::print_nmethod(bool printmethod) {
   // Print the header part, then print the requested information.
   // This is both handled in decode2().
   if (printmethod) {
-    HandleMark hm;
     ResourceMark m;
     if (is_compiled_by_c1()) {
       tty->cr();
@@ -967,16 +978,20 @@ void nmethod::print_nmethod(bool printmethod) {
 #if defined(SUPPORT_DATA_STRUCTS)
   if (AbstractDisassembler::show_structs()) {
     methodHandle mh(Thread::current(), _method);
-    if (printmethod || PrintDebugInfo || CompilerOracle::has_option_string(mh, "PrintDebugInfo")) {
+    if (printmethod || PrintDebugInfo || CompilerOracle::has_option(mh, CompileCommand::PrintDebugInfo)) {
       print_scopes();
       tty->print_cr("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
     }
-    if (printmethod || PrintRelocations || CompilerOracle::has_option_string(mh, "PrintRelocations")) {
+    if (printmethod || PrintRelocations || CompilerOracle::has_option(mh, CompileCommand::PrintRelocations)) {
       print_relocations();
       tty->print_cr("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
     }
-    if (printmethod || PrintDependencies || CompilerOracle::has_option_string(mh, "PrintDependencies")) {
+    if (printmethod || PrintDependencies || CompilerOracle::has_option(mh, CompileCommand::PrintDependencies)) {
       print_dependencies();
+      tty->print_cr("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
+    }
+    if (printmethod && native_invokers_begin() < native_invokers_end()) {
+      print_native_invokers();
       tty->print_cr("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
     }
     if (printmethod || PrintExceptionHandlers) {
@@ -1036,6 +1051,12 @@ void nmethod::copy_values(GrowableArray<Metadata*>* array) {
   Metadata** dest = metadata_begin();
   for (int index = 0 ; index < length; index++) {
     dest[index] = array->at(index);
+  }
+}
+
+void nmethod::free_native_invokers() {
+  for (BufferBlob** it = native_invokers_begin(); it < native_invokers_end(); it++) {
+    CodeCache::free(*it);
   }
 }
 
@@ -1116,7 +1137,9 @@ bool nmethod::can_convert_to_zombie() {
   // not_entrant. However, with concurrent code cache unloading, the state
   // might have moved on to unloaded if it is_unloading(), due to racing
   // concurrent GC threads.
-  assert(is_not_entrant() || is_unloading(), "must be a non-entrant method");
+  assert(is_not_entrant() || is_unloading() ||
+         !Thread::current()->is_Code_cache_sweeper_thread(),
+         "must be a non-entrant method if called from sweeper");
 
   // Since the nmethod sweeper only does partial sweep the sweeper's traversal
   // count can be greater than the stack traversal count before it hits the
@@ -2004,23 +2027,22 @@ void nmethod::oops_do_marking_epilogue() {
 
   nmethod* next = _oops_do_mark_nmethods;
   _oops_do_mark_nmethods = NULL;
-  if (next == NULL) {
-    return;
-  }
-  nmethod* cur;
-  do {
-    cur = next;
-    next = extract_nmethod(cur->_oops_do_mark_link);
-    cur->_oops_do_mark_link = NULL;
-    DEBUG_ONLY(cur->verify_oop_relocations());
+  if (next != NULL) {
+    nmethod* cur;
+    do {
+      cur = next;
+      next = extract_nmethod(cur->_oops_do_mark_link);
+      cur->_oops_do_mark_link = NULL;
+      DEBUG_ONLY(cur->verify_oop_relocations());
 
-    LogTarget(Trace, gc, nmethod) lt;
-    if (lt.is_enabled()) {
-      LogStream ls(lt);
-      CompileTask::print(&ls, cur, "oops_do, unmark", /*short_form:*/ true);
-    }
-    // End if self-loop has been detected.
-  } while (cur != next);
+      LogTarget(Trace, gc, nmethod) lt;
+      if (lt.is_enabled()) {
+        LogStream ls(lt);
+        CompileTask::print(&ls, cur, "oops_do, unmark", /*short_form:*/ true);
+      }
+      // End if self-loop has been detected.
+    } while (cur != next);
+  }
   log_trace(gc, nmethod)("oops_do_marking_epilogue");
 }
 
@@ -2404,6 +2426,7 @@ void nmethod::verify() {
 
 
 void nmethod::verify_interrupt_point(address call_site) {
+
   // Verify IC only when nmethod installation is finished.
   if (!is_not_installed()) {
     if (CompiledICLocker::is_safe(this)) {
@@ -2414,11 +2437,11 @@ void nmethod::verify_interrupt_point(address call_site) {
     }
   }
 
+  HandleMark hm(Thread::current());
+
   PcDesc* pd = pc_desc_at(nativeCall_at(call_site)->return_address());
   assert(pd != NULL, "PcDesc must exist");
-  for (ScopeDesc* sd = new ScopeDesc(this, pd->scope_decode_offset(),
-                                     pd->obj_decode_offset(), pd->should_reexecute(), pd->rethrow_exception(),
-                                     pd->return_oop());
+  for (ScopeDesc* sd = new ScopeDesc(this, pd);
        !sd->is_top(); sd = sd->sender()) {
     sd->verify();
   }
@@ -2553,7 +2576,6 @@ void nmethod::print(outputStream* st) const {
 }
 
 void nmethod::print_code() {
-  HandleMark hm;
   ResourceMark m;
   ttyLocker ttyl;
   // Call the specialized decode method of this class.
@@ -2583,7 +2605,6 @@ void nmethod::print_dependencies() {
 
 // Print the oops from the underlying CodeBlob.
 void nmethod::print_oops(outputStream* st) {
-  HandleMark hm;
   ResourceMark m;
   st->print("Oops:");
   if (oops_begin() < oops_end()) {
@@ -2609,7 +2630,6 @@ void nmethod::print_oops(outputStream* st) {
 
 // Print metadata pool.
 void nmethod::print_metadata(outputStream* st) {
-  HandleMark hm;
   ResourceMark m;
   st->print("Metadata:");
   if (metadata_begin() < metadata_end()) {
@@ -2669,6 +2689,14 @@ void nmethod::print_pcs_on(outputStream* st) {
     }
   } else {
     st->print_cr(" <list empty>");
+  }
+}
+
+void nmethod::print_native_invokers() {
+  ResourceMark m;       // in case methods get printed via debugger
+  tty->print_cr("Native invokers:");
+  for (BufferBlob** itt = native_invokers_begin(); itt < native_invokers_end(); itt++) {
+    (*itt)->print_on(tty);
   }
 }
 
@@ -3056,9 +3084,7 @@ const char* nmethod::reloc_string_for(u_char* begin, u_char* end) {
 ScopeDesc* nmethod::scope_desc_in(address begin, address end) {
   PcDesc* p = pc_desc_near(begin+1);
   if (p != NULL && p->real_pc(this) <= end) {
-    return new ScopeDesc(this, p->scope_decode_offset(),
-                         p->obj_decode_offset(), p->should_reexecute(), p->rethrow_exception(),
-                         p->return_oop());
+    return new ScopeDesc(this, p);
   }
   return NULL;
 }
@@ -3114,7 +3140,7 @@ void nmethod::print_nmethod_labels(outputStream* stream, address block_begin, bo
         assert(sig_index == sizeargs, "");
       }
       const char* spname = "sp"; // make arch-specific?
-      intptr_t out_preserve = SharedRuntime::java_calling_convention(sig_bt, regs, sizeargs, false);
+      intptr_t out_preserve = SharedRuntime::java_calling_convention(sig_bt, regs, sizeargs);
       int stack_slot_offset = this->frame_size() * wordSize;
       int tab1 = 14, tab2 = 24;
       int sig_index = 0;

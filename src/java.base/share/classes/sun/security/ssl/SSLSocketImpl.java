@@ -83,8 +83,8 @@ public final class SSLSocketImpl
 
     private String                  peerHost;
     private boolean                 autoClose;
-    private boolean                 isConnected = false;
-    private volatile boolean        tlsIsClosed = false;
+    private boolean                 isConnected;
+    private volatile boolean        tlsIsClosed;
 
     private final ReentrantLock     socketLock = new ReentrantLock();
     private final ReentrantLock     handshakeLock = new ReentrantLock();
@@ -354,7 +354,7 @@ public final class SSLSocketImpl
     public SSLSession getSession() {
         try {
             // start handshaking, if failed, the connection will be closed.
-            ensureNegotiated();
+            ensureNegotiated(false);
         } catch (IOException ioe) {
             if (SSLLogger.isOn && SSLLogger.isOn("handshake")) {
                 SSLLogger.severe("handshake failed", ioe);
@@ -409,6 +409,10 @@ public final class SSLSocketImpl
 
     @Override
     public void startHandshake() throws IOException {
+        startHandshake(true);
+    }
+
+    private void startHandshake(boolean resumable) throws IOException {
         if (!isConnected) {
             throw new SocketException("Socket is not connected");
         }
@@ -437,7 +441,12 @@ public final class SSLSocketImpl
                     readHandshakeRecord();
                 }
             } catch (InterruptedIOException iioe) {
-                handleException(iioe);
+                if(resumable){
+                    handleException(iioe);
+                } else{
+                    throw conContext.fatal(Alert.HANDSHAKE_FAILURE,
+                            "Couldn't kickstart handshaking", iioe);
+                }
             } catch (IOException ioe) {
                 throw conContext.fatal(Alert.HANDSHAKE_FAILURE,
                     "Couldn't kickstart handshaking", ioe);
@@ -544,7 +553,7 @@ public final class SSLSocketImpl
     // locks may be deadlocked.
     @Override
     public void close() throws IOException {
-        if (tlsIsClosed) {
+        if (isClosed()) {
             return;
         }
 
@@ -553,19 +562,16 @@ public final class SSLSocketImpl
         }
 
         try {
-            // shutdown output bound, which may have been closed previously.
-            if (!isOutputShutdown()) {
-                duplexCloseOutput();
-            }
+            if (isConnected()) {
+                // shutdown output bound, which may have been closed previously.
+                if (!isOutputShutdown()) {
+                    duplexCloseOutput();
+                }
 
-            // shutdown input bound, which may have been closed previously.
-            if (!isInputShutdown()) {
-                duplexCloseInput();
-            }
-
-            if (!isClosed()) {
-                // close the connection directly
-                closeSocket(false);
+                // shutdown input bound, which may have been closed previously.
+                if (!isInputShutdown()) {
+                    duplexCloseInput();
+                }
             }
         } catch (IOException ioe) {
             // ignore the exception
@@ -573,7 +579,19 @@ public final class SSLSocketImpl
                 SSLLogger.warning("SSLSocket duplex close failed", ioe);
             }
         } finally {
-            tlsIsClosed = true;
+            if (!isClosed()) {
+                // close the connection directly
+                try {
+                    closeSocket(false);
+                } catch (IOException ioe) {
+                    // ignore the exception
+                    if (SSLLogger.isOn && SSLLogger.isOn("ssl")) {
+                        SSLLogger.warning("SSLSocket close failed", ioe);
+                    }
+                } finally {
+                    tlsIsClosed = true;
+                }
+            }
         }
     }
 
@@ -867,7 +885,7 @@ public final class SSLSocketImpl
         }
     }
 
-    private void ensureNegotiated() throws IOException {
+    private void ensureNegotiated(boolean resumable) throws IOException {
         if (conContext.isNegotiated || conContext.isBroken ||
                 conContext.isInboundClosed() || conContext.isOutboundClosed()) {
             return;
@@ -882,7 +900,7 @@ public final class SSLSocketImpl
                 return;
             }
 
-            startHandshake();
+            startHandshake(resumable);
         } finally {
             handshakeLock.unlock();
         }
@@ -973,7 +991,7 @@ public final class SSLSocketImpl
             if (!conContext.isNegotiated && !conContext.isBroken &&
                     !conContext.isInboundClosed() &&
                     !conContext.isOutboundClosed()) {
-                ensureNegotiated();
+                ensureNegotiated(true);
             }
 
             // Check if the Socket is invalid (error or closed).
@@ -1252,7 +1270,7 @@ public final class SSLSocketImpl
             if (!conContext.isNegotiated && !conContext.isBroken &&
                     !conContext.isInboundClosed() &&
                     !conContext.isOutboundClosed()) {
-                ensureNegotiated();
+                ensureNegotiated(true);
             }
 
             // Check if the Socket is invalid (error or closed).
@@ -1537,7 +1555,7 @@ public final class SSLSocketImpl
             if (SSLLogger.isOn && SSLLogger.isOn("ssl")) {
                 SSLLogger.finest("trigger new session ticket");
             }
-            NewSessionTicket.kickstartProducer.produce(
+            NewSessionTicket.t13PosthandshakeProducer.produce(
                     new PostHandshakeContext(conContext));
         }
     }

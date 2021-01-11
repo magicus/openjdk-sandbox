@@ -81,7 +81,7 @@ void OptoRuntime::generate_exception_blob() {
   OopMap* map = new OopMap(frame_size_in_bytes / sizeof(jint), 0);
 
   // Exception pc is 'return address' for stack walker.
-  __ std(R4_ARG2/*exception pc*/, _abi(lr), R1_SP);
+  __ std(R4_ARG2/*exception pc*/, _abi0(lr), R1_SP);
 
   // Store the exception in the Thread object.
   __ std(R3_ARG1/*exception oop*/, in_bytes(JavaThread::exception_oop_offset()), R16_thread);
@@ -108,7 +108,7 @@ void OptoRuntime::generate_exception_blob() {
   address calls_return_pc = __ last_calls_return_pc();
 # ifdef ASSERT
   __ cmpdi(CCR0, R3_RET, 0);
-  __ asm_assert_ne("handle_exception_C must not return NULL", 0x601);
+  __ asm_assert_ne("handle_exception_C must not return NULL");
 # endif
 
   // Set an oopmap for the call site. This oopmap will only be used if we

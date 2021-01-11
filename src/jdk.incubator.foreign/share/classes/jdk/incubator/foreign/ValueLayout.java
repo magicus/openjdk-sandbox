@@ -25,10 +25,11 @@
  */
 package jdk.incubator.foreign;
 
+import java.lang.constant.Constable;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.DynamicConstantDesc;
-import java.lang.constant.MethodHandleDesc;
 import java.nio.ByteOrder;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -44,6 +45,9 @@ import java.util.OptionalLong;
  * {@code ValueLayout} may have unpredictable results and should be avoided.
  * The {@code equals} method should be used for comparisons.
  *
+ * <p> Unless otherwise specified, passing a {@code null} argument, or an array argument containing one or more {@code null}
+ * elements to a method in this class causes a {@link NullPointerException NullPointerException} to be thrown. </p>
+ *
  * @implSpec
  * This class is immutable and thread-safe.
  */
@@ -52,11 +56,11 @@ public final class ValueLayout extends AbstractLayout implements MemoryLayout {
     private final ByteOrder order;
 
     ValueLayout(ByteOrder order, long size) {
-        this(order, size, size, Optional.empty());
+        this(order, size, size, Map.of());
     }
 
-    ValueLayout(ByteOrder order, long size, long alignment, Optional<String> name) {
-        super(OptionalLong.of(size), alignment, name);
+    ValueLayout(ByteOrder order, long size, long alignment, Map<String, Constable> attributes) {
+        super(OptionalLong.of(size), alignment, attributes);
         this.order = order;
     }
 
@@ -76,7 +80,7 @@ public final class ValueLayout extends AbstractLayout implements MemoryLayout {
      * @return a new value layout with given byte order.
      */
     public ValueLayout withOrder(ByteOrder order) {
-        return new ValueLayout(order, bitSize(), alignment, optName());
+        return new ValueLayout(Objects.requireNonNull(order), bitSize(), alignment, attributes);
     }
 
     @Override
@@ -109,14 +113,14 @@ public final class ValueLayout extends AbstractLayout implements MemoryLayout {
     }
 
     @Override
-    ValueLayout dup(long alignment, Optional<String> name) {
-        return new ValueLayout(order, bitSize(), alignment, name);
+    ValueLayout dup(long alignment, Map<String, Constable> attributes) {
+        return new ValueLayout(order, bitSize(), alignment, attributes);
     }
 
     @Override
     public Optional<DynamicConstantDesc<ValueLayout>> describeConstable() {
-        return Optional.of(DynamicConstantDesc.ofNamed(ConstantDescs.BSM_INVOKE, "value",
-                CD_VALUE_LAYOUT, MH_VALUE, bitSize(), order == ByteOrder.BIG_ENDIAN ? BIG_ENDIAN : LITTLE_ENDIAN));
+        return Optional.of(decorateLayoutConstant(DynamicConstantDesc.ofNamed(ConstantDescs.BSM_INVOKE, "value",
+                CD_VALUE_LAYOUT, MH_VALUE, bitSize(), order == ByteOrder.BIG_ENDIAN ? BIG_ENDIAN : LITTLE_ENDIAN)));
     }
 
     //hack: the declarations below are to make javadoc happy; we could have used generics in AbstractLayout
@@ -136,5 +140,13 @@ public final class ValueLayout extends AbstractLayout implements MemoryLayout {
     @Override
     public ValueLayout withBitAlignment(long alignmentBits) {
         return (ValueLayout)super.withBitAlignment(alignmentBits);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public ValueLayout withAttribute(String name, Constable value) {
+        return (ValueLayout)super.withAttribute(name, value);
     }
 }

@@ -58,12 +58,17 @@
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/classLoaderMetaspace.hpp"
 #include "memory/metadataFactory.hpp"
+#include "memory/metaspace.hpp"
 #include "memory/resourceArea.hpp"
+#include "memory/universe.hpp"
 #include "oops/access.inline.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/oopHandle.inline.hpp"
 #include "oops/weakHandle.inline.hpp"
+#include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/mutex.hpp"
@@ -131,7 +136,7 @@ ClassLoaderData::ClassLoaderData(Handle h_class_loader, bool has_class_mirror_ho
   _metaspace_lock(new Mutex(Mutex::leaf+1, "Metaspace allocation lock", true,
                             Mutex::_safepoint_check_never)),
   _unloading(false), _has_class_mirror_holder(has_class_mirror_holder),
-  _modified_oops(true), _accumulated_modified_oops(false),
+  _modified_oops(true),
   // An unsafe anonymous class loader data doesn't have anything to keep
   // it from being unloaded during parsing of the unsafe anonymous class.
   // The null-class-loader should always be kept alive.
@@ -183,7 +188,7 @@ ClassLoaderData::ChunkedHandleList::~ChunkedHandleList() {
   }
 }
 
-oop* ClassLoaderData::ChunkedHandleList::add(oop o) {
+OopHandle ClassLoaderData::ChunkedHandleList::add(oop o) {
   if (_head == NULL || _head->_size == Chunk::CAPACITY) {
     Chunk* next = new Chunk(_head);
     Atomic::release_store(&_head, next);
@@ -191,7 +196,7 @@ oop* ClassLoaderData::ChunkedHandleList::add(oop o) {
   oop* handle = &_head->_data[_head->_size];
   NativeAccess<IS_DEST_UNINITIALIZED>::oop_store(handle, o);
   Atomic::release_store(&_head->_size, _head->_size + 1);
-  return handle;
+  return OopHandle(handle);
 }
 
 int ClassLoaderData::ChunkedHandleList::count() const {
@@ -298,7 +303,9 @@ bool ClassLoaderData::try_claim(int claim) {
 // it is being defined, therefore _keep_alive is not volatile or atomic.
 void ClassLoaderData::inc_keep_alive() {
   if (has_class_mirror_holder()) {
-    assert(_keep_alive > 0, "Invalid keep alive increment count");
+    if (!Arguments::is_dumping_archive()) {
+      assert(_keep_alive > 0, "Invalid keep alive increment count");
+    }
     _keep_alive++;
   }
 }
@@ -487,7 +494,7 @@ void ClassLoaderData::add_class(Klass* k, bool publicize /* true */) {
 void ClassLoaderData::initialize_holder(Handle loader_or_mirror) {
   if (loader_or_mirror() != NULL) {
     assert(_holder.is_null(), "never replace holders");
-    _holder = WeakHandle<vm_class_loader_data>::create(loader_or_mirror);
+    _holder = WeakHandle(Universe::vm_weak(), loader_or_mirror);
   }
 }
 
@@ -654,7 +661,7 @@ ClassLoaderData::~ClassLoaderData() {
   ClassLoaderDataGraph::dec_instance_classes(cl.instance_class_released());
 
   // Release the WeakHandle
-  _holder.release();
+  _holder.release(Universe::vm_weak());
 
   // Release C heap allocated hashtable for all the packages.
   if (_packages != NULL) {
@@ -776,7 +783,7 @@ ClassLoaderMetaspace* ClassLoaderData::metaspace_non_null() {
 OopHandle ClassLoaderData::add_handle(Handle h) {
   MutexLocker ml(metaspace_lock(),  Mutex::_no_safepoint_check_flag);
   record_modified_oops();
-  return OopHandle(_handles.add(h()));
+  return _handles.add(h());
 }
 
 void ClassLoaderData::remove_handle(OopHandle h) {
@@ -804,7 +811,7 @@ void ClassLoaderData::add_to_deallocate_list(Metadata* m) {
   if (!m->is_shared()) {
     MutexLocker ml(metaspace_lock(),  Mutex::_no_safepoint_check_flag);
     if (_deallocate_list == NULL) {
-      _deallocate_list = new (ResourceObj::C_HEAP, mtClass) GrowableArray<Metadata*>(100, true);
+      _deallocate_list = new (ResourceObj::C_HEAP, mtClass) GrowableArray<Metadata*>(100, mtClass);
     }
     _deallocate_list->append_if_missing(m);
     log_debug(class, loader, data)("deallocate added for %s", m->print_value_string());
@@ -949,9 +956,11 @@ void ClassLoaderData::verify() {
   guarantee(cl != NULL || this == ClassLoaderData::the_null_class_loader_data() || has_class_mirror_holder(), "must be");
 
   // Verify the integrity of the allocated space.
+#ifdef ASSERT
   if (metaspace_or_null() != NULL) {
     metaspace_or_null()->verify();
   }
+#endif
 
   for (Klass* k = _klasses; k != NULL; k = k->next_link()) {
     guarantee(k->class_loader_data() == this, "Must be the same");

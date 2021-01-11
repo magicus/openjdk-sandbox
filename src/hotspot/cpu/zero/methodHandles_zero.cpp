@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2009, 2010, 2011 Red Hat, Inc.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,19 +25,22 @@
 
 #include "precompiled.hpp"
 #include "classfile/javaClasses.inline.hpp"
-#include "interpreter/cppInterpreterGenerator.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interpreterRuntime.hpp"
+#include "interpreter/zero/zeroInterpreterGenerator.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
+#include "oops/instanceKlass.inline.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/method.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/frame.inline.hpp"
 #include "prims/methodHandles.hpp"
 
+
 void MethodHandles::invoke_target(Method* method, TRAPS) {
 
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
   ZeroStack *stack = thread->zero_stack();
   InterpreterFrame *frame = thread->top_zero_frame()->as_interpreter_frame();
   interpreterState istate = frame->interpreter_state();
@@ -54,7 +57,7 @@ void MethodHandles::invoke_target(Method* method, TRAPS) {
 
 oop MethodHandles::popFromStack(TRAPS) {
 
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
   InterpreterFrame *frame = thread->top_zero_frame()->as_interpreter_frame();
   interpreterState istate = frame->interpreter_state();
   intptr_t* topOfStack = istate->stack();
@@ -69,7 +72,7 @@ oop MethodHandles::popFromStack(TRAPS) {
 
 void MethodHandles::throw_AME(Klass* rcvr, Method* interface_method, TRAPS) {
 
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
   // Set up the frame anchor if it isn't already
   bool has_last_Java_frame = thread->has_last_Java_frame();
   if (!has_last_Java_frame) {
@@ -100,7 +103,7 @@ void MethodHandles::throw_AME(Klass* rcvr, Method* interface_method, TRAPS) {
 
 int MethodHandles::method_handle_entry_invokeBasic(Method* method, intptr_t UNUSED, TRAPS) {
 
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
   InterpreterFrame *frame = thread->top_zero_frame()->as_interpreter_frame();
   interpreterState istate = frame->interpreter_state();
   intptr_t* topOfStack = istate->stack();
@@ -131,7 +134,7 @@ int MethodHandles::method_handle_entry_linkToStaticOrSpecial(Method* method, int
 }
 
 int MethodHandles::method_handle_entry_linkToInterface(Method* method, intptr_t UNUSED, TRAPS) {
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
   InterpreterFrame *frame = thread->top_zero_frame()->as_interpreter_frame();
   interpreterState istate = frame->interpreter_state();
 
@@ -171,7 +174,7 @@ int MethodHandles::method_handle_entry_linkToInterface(Method* method, intptr_t 
 }
 
 int MethodHandles::method_handle_entry_linkToVirtual(Method* method, intptr_t UNUSED, TRAPS) {
-  JavaThread *thread = (JavaThread *) THREAD;
+  JavaThread *thread = THREAD->as_Java_thread();
 
   InterpreterFrame *frame = thread->top_zero_frame()->as_interpreter_frame();
   interpreterState istate = frame->interpreter_state();
@@ -207,19 +210,20 @@ address MethodHandles::generate_method_handle_interpreter_entry(MacroAssembler* 
   switch (iid) {
   case vmIntrinsics::_invokeGeneric:
   case vmIntrinsics::_compiledLambdaForm:
+  case vmIntrinsics::_linkToNative:
     // Perhaps surprisingly, the symbolic references visible to Java are not directly used.
     // They are linked to Java-generated adapters via MethodHandleNatives.linkMethod.
     // They all allow an appendix argument.
-    return CppInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_invalid);
+    return ZeroInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_invalid);
   case vmIntrinsics::_invokeBasic:
-    return CppInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_invokeBasic);
+    return ZeroInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_invokeBasic);
   case vmIntrinsics::_linkToStatic:
   case vmIntrinsics::_linkToSpecial:
-    return CppInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToStaticOrSpecial);
+    return ZeroInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToStaticOrSpecial);
   case vmIntrinsics::_linkToInterface:
-    return CppInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToInterface);
+    return ZeroInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToInterface);
   case vmIntrinsics::_linkToVirtual:
-    return CppInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToVirtual);
+    return ZeroInterpreterGenerator::generate_entry_impl(masm, (address) MethodHandles::method_handle_entry_linkToVirtual);
   default:
     ShouldNotReachHere();
     return NULL;

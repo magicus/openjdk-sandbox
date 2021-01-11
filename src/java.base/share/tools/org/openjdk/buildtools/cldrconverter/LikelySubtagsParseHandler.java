@@ -58,7 +58,8 @@ class LikelySubtagsParseHandler extends AbstractLDMLHandler<String> {
             String from = attributes.getValue("from");
             if (!from.startsWith("und")) {
                 // Ignore the "undefined" language for now
-                put(from, attributes.getValue("to"));
+                put(CLDRConverter.toLanguageTag(from),
+                    CLDRConverter.toLanguageTag(attributes.getValue("to")));
             }
             pushIgnoredContainer(qName);
             break;

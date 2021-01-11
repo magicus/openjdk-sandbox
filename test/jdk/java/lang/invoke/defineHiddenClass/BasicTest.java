@@ -26,9 +26,12 @@
  * @modules java.base/jdk.internal.org.objectweb.asm
  *          jdk.compiler
  * @library /test/lib
+ * @compile BadClassFile.jcod
+ *          BadClassFile2.jcod
+ *          BadClassFileVersion.jcod
  * @build jdk.test.lib.Utils
  *        jdk.test.lib.compiler.CompilerUtils
- * @run testng/othervm --enable-preview BasicTest
+ * @run testng/othervm BasicTest
  */
 
 import java.io.File;
@@ -74,8 +77,7 @@ public class BasicTest {
 
     @BeforeTest
     static void setup() throws IOException {
-        compileSources(SRC_DIR, CLASSES_DIR,
-                "--enable-preview", "-source", String.valueOf(Runtime.version().feature()));
+        compileSources(SRC_DIR, CLASSES_DIR);
         hiddenClassBytes = Files.readAllBytes(CLASSES_DIR.resolve("HiddenClass.class"));
 
         // compile with --release 10 with no NestHost and NestMembers attribute
@@ -360,7 +362,7 @@ public class BasicTest {
         }
     }
 
-    @Test(expectedExceptions = {IllegalArgumentException.class})
+    @Test(expectedExceptions = { IllegalArgumentException.class })
     public void cantDefineModule() throws Throwable {
         Path src = Paths.get("module-info.java");
         Path dir = CLASSES_DIR.resolve("m");
@@ -371,7 +373,7 @@ public class BasicTest {
         lookup().defineHiddenClass(bytes, false);
     }
 
-    @Test(expectedExceptions = {IllegalArgumentException.class})
+    @Test(expectedExceptions = { IllegalArgumentException.class })
     public void cantDefineClassInAnotherPackage() throws Throwable {
         Path src = Paths.get("ClassInAnotherPackage.java");
         Files.write(src, List.of("package p;", "public class ClassInAnotherPackage {}"), StandardCharsets.UTF_8);
@@ -381,10 +383,36 @@ public class BasicTest {
         lookup().defineHiddenClass(bytes, false);
     }
 
-    @Test(expectedExceptions = {IllegalAccessException.class})
+    @Test(expectedExceptions = { IllegalAccessException.class })
     public void lessPrivilegedLookup() throws Throwable {
         Lookup lookup = lookup().dropLookupMode(Lookup.PRIVATE);
         lookup.defineHiddenClass(hiddenClassBytes, false);
+    }
+
+    @Test(expectedExceptions = { UnsupportedClassVersionError.class })
+    public void badClassFileVersion() throws Throwable {
+        Path dir = Paths.get(System.getProperty("test.classes", "."));
+        byte[] bytes = Files.readAllBytes(dir.resolve("BadClassFileVersion.class"));
+        lookup().defineHiddenClass(bytes, false);
+    }
+
+    // malformed class files
+    @DataProvider(name = "malformedClassFiles")
+    private Object[][] malformedClassFiles() throws IOException {
+        Path dir = Paths.get(System.getProperty("test.classes", "."));
+        return new Object[][] {
+                // `this_class` has invalid CP entry
+                new Object[] { Files.readAllBytes(dir.resolve("BadClassFile.class")) },
+                new Object[] { Files.readAllBytes(dir.resolve("BadClassFile2.class")) },
+                // truncated file
+                new Object[] { new byte[0] },
+                new Object[] { new byte[] {(byte) 0xCA, (byte) 0xBA, (byte) 0xBE, (byte) 0x00} },
+        };
+    }
+
+    @Test(dataProvider = "malformedClassFiles", expectedExceptions = ClassFormatError.class)
+    public void badClassFile(byte[] bytes) throws Throwable {
+        lookup().defineHiddenClass(bytes, false);
     }
 
     @DataProvider(name = "nestedTypesOrAnonymousClass")

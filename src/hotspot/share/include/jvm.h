@@ -158,6 +158,9 @@ JVM_MaxMemory(void);
 JNIEXPORT jint JNICALL
 JVM_ActiveProcessorCount(void);
 
+JNIEXPORT jboolean JNICALL
+JVM_IsUseContainerSupport(void);
+
 JNIEXPORT void * JNICALL
 JVM_LoadLibrary(const char *name);
 
@@ -176,8 +179,37 @@ JVM_GetVmArguments(JNIEnv *env);
 JNIEXPORT void JNICALL
 JVM_InitializeFromArchive(JNIEnv* env, jclass cls);
 
+JNIEXPORT void JNICALL
+JVM_RegisterLambdaProxyClassForArchiving(JNIEnv* env, jclass caller,
+                                         jstring invokedName,
+                                         jobject invokedType,
+                                         jobject methodType,
+                                         jobject implMethodMember,
+                                         jobject instantiatedMethodType,
+                                         jclass lambdaProxyClass);
+
+JNIEXPORT jclass JNICALL
+JVM_LookupLambdaProxyClassFromArchive(JNIEnv* env, jclass caller,
+                                      jstring invokedName,
+                                      jobject invokedType,
+                                      jobject methodType,
+                                      jobject implMethodMember,
+                                      jobject instantiatedMethodType);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsCDSDumpingEnabled(JNIEnv* env);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsSharingEnabled(JNIEnv* env);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsDumpingClassList(JNIEnv* env);
+
 JNIEXPORT jlong JNICALL
-JVM_GetRandomSeedForCDSDump();
+JVM_GetRandomSeedForDumping();
+
+JNIEXPORT void JNICALL
+JVM_LogLambdaFormInvoker(JNIEnv* env, jstring line);
 
 /*
  * java.lang.Throwable
@@ -296,6 +328,18 @@ JVM_HasReferencePendingList(JNIEnv *env);
 
 JNIEXPORT void JNICALL
 JVM_WaitForReferencePendingList(JNIEnv *env);
+
+JNIEXPORT jboolean JNICALL
+JVM_ReferenceRefersTo(JNIEnv *env, jobject ref, jobject o);
+
+JNIEXPORT void JNICALL
+JVM_ReferenceClear(JNIEnv *env, jobject ref);
+
+/*
+ * java.lang.ref.PhantomReference
+ */
+JNIEXPORT jboolean JNICALL
+JVM_PhantomReferenceRefersTo(JNIEnv *env, jobject ref, jobject o);
 
 /*
  * java.io.ObjectInputStream
@@ -464,6 +508,14 @@ JNIEXPORT void JNICALL
 JVM_AddReadsModule(JNIEnv *env, jobject from_module, jobject source_module);
 
 /*
+ * Define all modules that have been stored in the CDS archived heap.
+ *  platform_loader: the built-in platform class loader
+ *  system_loader:   the built-in system class loader
+ */
+JNIEXPORT void JNICALL
+JVM_DefineArchivedModules(JNIEnv *env, jobject platform_loader, jobject system_loader);
+
+/*
  * Reflection support functions
  */
 
@@ -566,6 +618,11 @@ JVM_IsRecord(JNIEnv *env, jclass cls);
 
 JNIEXPORT jobjectArray JNICALL
 JVM_GetRecordComponents(JNIEnv *env, jclass ofClass);
+
+/* Sealed types - since JDK 15 */
+
+JNIEXPORT jobjectArray JNICALL
+JVM_GetPermittedSubclasses(JNIEnv *env, jclass current);
 
 /* The following two reflection routines are still needed due to startup time issues */
 /*

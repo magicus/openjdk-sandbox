@@ -178,7 +178,7 @@ void BarrierSetAssembler::eden_allocate(MacroAssembler* masm, Register obj,
     Label retry;
     __ bind(retry);
     {
-      unsigned long offset;
+      uint64_t offset;
       __ adrp(rscratch1, ExternalAddress((address) Universe::heap()->end_addr()), offset);
       __ ldr(heap_end, Address(rscratch1, offset));
     }
@@ -187,7 +187,7 @@ void BarrierSetAssembler::eden_allocate(MacroAssembler* masm, Register obj,
 
     // Get the current top of the heap
     {
-      unsigned long offset;
+      uint64_t offset;
       __ adrp(rscratch1, heap_top, offset);
       // Use add() here after ARDP, rather than lea().
       // lea() does not generate anything if its offset is zero.
@@ -254,7 +254,7 @@ void BarrierSetAssembler::nmethod_entry_barrier(MacroAssembler* masm) {
   __ cmpw(rscratch1, rscratch2);
   __ br(Assembler::EQ, skip);
 
-  __ mov(rscratch1, StubRoutines::aarch64::method_entry_barrier());
+  __ movptr(rscratch1, (uintptr_t) StubRoutines::aarch64::method_entry_barrier());
   __ blr(rscratch1);
   __ b(skip);
 

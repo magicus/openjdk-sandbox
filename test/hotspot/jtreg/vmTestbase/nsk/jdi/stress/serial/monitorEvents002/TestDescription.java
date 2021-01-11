@@ -40,24 +40,32 @@
  *
  * @library /vmTestbase
  *          /test/lib
- * @run driver jdk.test.lib.FileInstaller . .
+ * @comment some of the tests from monitorEvents002.tests need WhiteBox
+ * @modules java.base/jdk.internal.misc:+open
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *
  *
  * @comment build classes required for tests from monitorEvents002.tests
- * @build nsk.share.jdi.EventTestTemplates
+ * @build nsk.share.jdi.ClassExclusionFilterTest
+ *        nsk.share.jdi.ClassFilterTest_ClassName
  *        nsk.share.jdi.JDIEventsDebuggee
+ *        nsk.share.jdi.ClassFilterTest_ReferenceType
+ *        nsk.share.jdi.ThreadFilterTest
  *        nsk.share.jdi.MonitorEventsDebuggee
  *
  * @build nsk.share.jdi.SerialExecutionDebugger
- * @run main/othervm/native PropertyResolvingWrapper
+ * @run main/othervm/native
  *      nsk.share.jdi.SerialExecutionDebugger
  *      -verbose
  *      -arch=${os.family}-${os.simpleArch}
  *      -waittime=5
  *      -debugee.vmkind=java
  *      -transport.address=dynamic
- *      "-debugee.vmkeys=${test.vm.opts} ${test.java.opts}"
+ *      -debugee.vmkeys="-Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                       -XX:+WhiteBoxAPI ${test.vm.opts} ${test.java.opts}"
  *      -testClassPath ${test.class.path}
- *      -configFile ./monitorEvents002.tests
+ *      -configFile ${test.src}/monitorEvents002.tests
  *      -testWorkDir .
  */
 

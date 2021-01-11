@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@
 #include "memory/heapShared.inline.hpp"
 #include "memory/metadataFactory.hpp"
 #include "memory/metaspaceShared.hpp"
+#include "runtime/arguments.hpp"
+#include "runtime/globals.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/numberSeq.hpp"
 #include <sys/stat.h>
@@ -50,7 +52,7 @@ CompactHashtableWriter::CompactHashtableWriter(int num_entries,
   _num_entries_written = 0;
   _buckets = NEW_C_HEAP_ARRAY(GrowableArray<Entry>*, _num_buckets, mtSymbol);
   for (int i=0; i<_num_buckets; i++) {
-    _buckets[i] = new (ResourceObj::C_HEAP, mtSymbol) GrowableArray<Entry>(0, true, mtSymbol);
+    _buckets[i] = new (ResourceObj::C_HEAP, mtSymbol) GrowableArray<Entry>(0, mtSymbol);
   }
 
   _stats = stats;
@@ -111,9 +113,11 @@ void CompactHashtableWriter::allocate_table() {
   _compact_entries = MetaspaceShared::new_ro_array<u4>(entries_space);
 
   _stats->bucket_count    = _num_buckets;
-  _stats->bucket_bytes    = _compact_buckets->size() * BytesPerWord;
+  _stats->bucket_bytes    = align_up(_compact_buckets->size() * BytesPerWord,
+                                     SharedSpaceObjectAlignment);
   _stats->hashentry_count = _num_entries_written;
-  _stats->hashentry_bytes = _compact_entries->size() * BytesPerWord;
+  _stats->hashentry_bytes = align_up(_compact_entries->size() * BytesPerWord,
+                                     SharedSpaceObjectAlignment);
 }
 
 // Write the compact table's buckets
@@ -212,11 +216,13 @@ size_t SimpleCompactHashtable::calculate_header_size() {
 void SimpleCompactHashtable::serialize_header(SerializeClosure* soc) {
   // NOTE: if you change this function, you MUST change the number 5 in
   // calculate_header_size() accordingly.
-  soc->do_ptr((void**)&_base_address);
   soc->do_u4(&_entry_count);
   soc->do_u4(&_bucket_count);
   soc->do_ptr((void**)&_buckets);
   soc->do_ptr((void**)&_entries);
+  if (soc->reading()) {
+    _base_address = (address)SharedBaseAddress;
+  }
 }
 #endif // INCLUDE_CDS
 

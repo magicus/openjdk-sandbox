@@ -27,6 +27,7 @@
 #include "aot/aotLoader.hpp"
 #include "classfile/classFileParser.hpp"
 #include "classfile/classFileStream.hpp"
+#include "classfile/classListWriter.hpp"
 #include "classfile/classLoader.hpp"
 #include "classfile/classLoaderData.inline.hpp"
 #include "classfile/javaClasses.hpp"
@@ -47,6 +48,7 @@
 #include "logging/logMessage.hpp"
 #include "logging/logStream.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/archiveUtils.hpp"
 #include "memory/iterator.inline.hpp"
 #include "memory/metadataFactory.hpp"
 #include "memory/metaspaceClosure.hpp"
@@ -69,6 +71,7 @@
 #include "prims/jvmtiRedefineClasses.hpp"
 #include "prims/jvmtiThreadState.hpp"
 #include "prims/methodComparator.hpp"
+#include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/fieldDescriptor.inline.hpp"
@@ -76,6 +79,7 @@
 #include "runtime/javaCalls.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/orderAccess.hpp"
+#include "runtime/reflectionUtils.hpp"
 #include "runtime/thread.inline.hpp"
 #include "services/classLoadingService.hpp"
 #include "services/threadService.hpp"
@@ -215,6 +219,57 @@ bool InstanceKlass::has_nest_member(InstanceKlass* k, TRAPS) const {
     }
   }
   log_trace(class, nestmates)("- class is NOT a nest member!");
+  return false;
+}
+
+// Called to verify that k is a permitted subclass of this class
+bool InstanceKlass::has_as_permitted_subclass(const InstanceKlass* k) const {
+  Thread* THREAD = Thread::current();
+  assert(k != NULL, "sanity check");
+  assert(_permitted_subclasses != NULL && _permitted_subclasses != Universe::the_empty_short_array(),
+         "unexpected empty _permitted_subclasses array");
+
+  if (log_is_enabled(Trace, class, sealed)) {
+    ResourceMark rm(THREAD);
+    log_trace(class, sealed)("Checking for permitted subclass of %s in %s",
+                             k->external_name(), this->external_name());
+  }
+
+  // Check that the class and its super are in the same module.
+  if (k->module() != this->module()) {
+    ResourceMark rm(THREAD);
+    log_trace(class, sealed)("Check failed for same module of permitted subclass %s and sealed class %s",
+                             k->external_name(), this->external_name());
+    return false;
+  }
+
+  if (!k->is_public() && !is_same_class_package(k)) {
+    ResourceMark rm(THREAD);
+    log_trace(class, sealed)("Check failed, subclass %s not public and not in the same package as sealed class %s",
+                             k->external_name(), this->external_name());
+    return false;
+  }
+
+  // Check for a resolved cp entry, else fall back to a name check.
+  // We don't want to resolve any class other than the one being checked.
+  for (int i = 0; i < _permitted_subclasses->length(); i++) {
+    int cp_index = _permitted_subclasses->at(i);
+    if (_constants->tag_at(cp_index).is_klass()) {
+      Klass* k2 = _constants->klass_at(cp_index, THREAD);
+      assert(!HAS_PENDING_EXCEPTION, "Unexpected exception");
+      if (k2 == k) {
+        log_trace(class, sealed)("- class is listed at permitted_subclasses[%d] => cp[%d]", i, cp_index);
+        return true;
+      }
+    } else {
+      Symbol* name = _constants->klass_name_at(cp_index);
+      if (name == k->name()) {
+        log_trace(class, sealed)("- Found it at permitted_subclasses[%d] => cp[%d]", i, cp_index);
+        return true;
+      }
+    }
+  }
+  log_trace(class, sealed)("- class is NOT a permitted subclass!");
   return false;
 }
 
@@ -484,6 +539,7 @@ InstanceKlass::InstanceKlass(const ClassFileParser& parser, unsigned kind, Klass
   Klass(id),
   _nest_members(NULL),
   _nest_host(NULL),
+  _permitted_subclasses(NULL),
   _record_components(NULL),
   _static_field_size(parser.static_field_size()),
   _nonstatic_oop_map_size(nonstatic_oop_map_size(parser.total_oop_map_count())),
@@ -665,6 +721,13 @@ void InstanceKlass::deallocate_contents(ClassLoaderData* loader_data) {
   }
   set_nest_members(NULL);
 
+  if (permitted_subclasses() != NULL &&
+      permitted_subclasses() != Universe::the_empty_short_array() &&
+      !permitted_subclasses()->is_shared()) {
+    MetadataFactory::free_array<jushort>(loader_data, permitted_subclasses());
+  }
+  set_permitted_subclasses(NULL);
+
   // We should deallocate the Annotations instance if it's not in shared spaces.
   if (annotations() != NULL && !annotations()->is_shared()) {
     MetadataFactory::free_metadata(loader_data, annotations());
@@ -674,6 +737,12 @@ void InstanceKlass::deallocate_contents(ClassLoaderData* loader_data) {
   if (Arguments::is_dumping_archive()) {
     SystemDictionaryShared::remove_dumptime_info(this);
   }
+}
+
+bool InstanceKlass::is_sealed() const {
+  return _permitted_subclasses != NULL &&
+         _permitted_subclasses != Universe::the_empty_short_array() &&
+         _permitted_subclasses->length() > 0;
 }
 
 bool InstanceKlass::should_be_initialized() const {
@@ -734,7 +803,7 @@ oop InstanceKlass::init_lock() const {
 void InstanceKlass::fence_and_clear_init_lock() {
   // make sure previous stores are all done, notably the init_state.
   OrderAccess::storestore();
-  java_lang_Class::set_init_lock(java_mirror(), NULL);
+  java_lang_Class::clear_init_lock(java_mirror());
   assert(!is_not_initialized(), "class must be initialized now");
 }
 
@@ -831,8 +900,7 @@ bool InstanceKlass::link_class_impl(TRAPS) {
 
   // Timing
   // timer handles recursion
-  assert(THREAD->is_Java_thread(), "non-JavaThread in link_class_impl");
-  JavaThread* jt = (JavaThread*)THREAD;
+  JavaThread* jt = THREAD->as_Java_thread();
 
   // link super class before linking this class
   Klass* super_klass = super();
@@ -934,9 +1002,7 @@ bool InstanceKlass::link_class_impl(TRAPS) {
 #endif
       set_init_state(linked);
       if (JvmtiExport::should_post_class_prepare()) {
-        Thread *thread = THREAD;
-        assert(thread->is_Java_thread(), "thread->is_Java_thread()");
-        JvmtiExport::post_class_prepare((JavaThread *) thread, this);
+        JvmtiExport::post_class_prepare(THREAD->as_Java_thread(), this);
       }
     }
   }
@@ -1000,8 +1066,7 @@ void InstanceKlass::initialize_impl(TRAPS) {
 
   bool wait = false;
 
-  assert(THREAD->is_Java_thread(), "non-JavaThread in initialize_impl");
-  JavaThread* jt = (JavaThread*)THREAD;
+  JavaThread* jt = THREAD->as_Java_thread();
 
   // refer to the JVM book page 47 for description of steps
   // Step 1
@@ -1092,15 +1157,23 @@ void InstanceKlass::initialize_impl(TRAPS) {
   // Step 8
   {
     DTRACE_CLASSINIT_PROBE_WAIT(clinit, -1, wait);
-    // Timer includes any side effects of class initialization (resolution,
-    // etc), but not recursive entry into call_class_initializer().
-    PerfClassTraceTime timer(ClassLoader::perf_class_init_time(),
-                             ClassLoader::perf_class_init_selftime(),
-                             ClassLoader::perf_classes_inited(),
-                             jt->get_thread_stat()->perf_recursion_counts_addr(),
-                             jt->get_thread_stat()->perf_timers_addr(),
-                             PerfClassTraceTime::CLASS_CLINIT);
-    call_class_initializer(THREAD);
+    if (class_initializer() != NULL) {
+      // Timer includes any side effects of class initialization (resolution,
+      // etc), but not recursive entry into call_class_initializer().
+      PerfClassTraceTime timer(ClassLoader::perf_class_init_time(),
+                               ClassLoader::perf_class_init_selftime(),
+                               ClassLoader::perf_classes_inited(),
+                               jt->get_thread_stat()->perf_recursion_counts_addr(),
+                               jt->get_thread_stat()->perf_timers_addr(),
+                               PerfClassTraceTime::CLASS_CLINIT);
+      call_class_initializer(THREAD);
+    } else {
+      // The elapsed time is so small it's not worth counting.
+      if (UsePerfData) {
+        ClassLoader::perf_classes_inited()->inc();
+      }
+      call_class_initializer(THREAD);
+    }
   }
 
   // Step 9
@@ -1369,7 +1442,7 @@ Klass* InstanceKlass::array_klass_impl(bool or_null, int n, TRAPS) {
     if (or_null) return NULL;
 
     ResourceMark rm(THREAD);
-    JavaThread *jt = (JavaThread *)THREAD;
+    JavaThread *jt = THREAD->as_Java_thread();
     {
       // Atomic creation of array_klasses
       MutexLocker ma(THREAD, MultiArray_lock);
@@ -1696,7 +1769,10 @@ inline int InstanceKlass::quick_search(const Array<Method*>* methods, const Symb
 // find_method looks up the name/signature in the local methods array
 Method* InstanceKlass::find_method(const Symbol* name,
                                    const Symbol* signature) const {
-  return find_method_impl(name, signature, find_overpass, find_static, find_private);
+  return find_method_impl(name, signature,
+                          OverpassLookupMode::find,
+                          StaticLookupMode::find,
+                          PrivateLookupMode::find);
 }
 
 Method* InstanceKlass::find_method_impl(const Symbol* name,
@@ -1721,8 +1797,8 @@ Method* InstanceKlass::find_instance_method(const Array<Method*>* methods,
   Method* const meth = InstanceKlass::find_method_impl(methods,
                                                  name,
                                                  signature,
-                                                 find_overpass,
-                                                 skip_static,
+                                                 OverpassLookupMode::find,
+                                                 StaticLookupMode::skip,
                                                  private_mode);
   assert(((meth == NULL) || !meth->is_static()),
     "find_instance_method should have skipped statics");
@@ -1780,9 +1856,9 @@ Method* InstanceKlass::find_method(const Array<Method*>* methods,
   return InstanceKlass::find_method_impl(methods,
                                          name,
                                          signature,
-                                         find_overpass,
-                                         find_static,
-                                         find_private);
+                                         OverpassLookupMode::find,
+                                         StaticLookupMode::find,
+                                         PrivateLookupMode::find);
 }
 
 Method* InstanceKlass::find_method_impl(const Array<Method*>* methods,
@@ -1825,9 +1901,9 @@ int InstanceKlass::find_method_index(const Array<Method*>* methods,
                                      OverpassLookupMode overpass_mode,
                                      StaticLookupMode static_mode,
                                      PrivateLookupMode private_mode) {
-  const bool skipping_overpass = (overpass_mode == skip_overpass);
-  const bool skipping_static = (static_mode == skip_static);
-  const bool skipping_private = (private_mode == skip_private);
+  const bool skipping_overpass = (overpass_mode == OverpassLookupMode::skip);
+  const bool skipping_static = (static_mode == StaticLookupMode::skip);
+  const bool skipping_private = (private_mode == PrivateLookupMode::skip);
   const int hit = quick_search(methods, name);
   if (hit != -1) {
     const Method* const m = methods->at(hit);
@@ -1903,13 +1979,13 @@ Method* InstanceKlass::uncached_lookup_method(const Symbol* name,
     Method* const method = InstanceKlass::cast(klass)->find_method_impl(name,
                                                                         signature,
                                                                         overpass_local_mode,
-                                                                        find_static,
+                                                                        StaticLookupMode::find,
                                                                         private_mode);
     if (method != NULL) {
       return method;
     }
     klass = klass->super();
-    overpass_local_mode = skip_overpass;   // Always ignore overpass methods in superclasses
+    overpass_local_mode = OverpassLookupMode::skip;   // Always ignore overpass methods in superclasses
   }
   return NULL;
 }
@@ -1939,7 +2015,7 @@ Method* InstanceKlass::lookup_method_in_ordered_interfaces(Symbol* name,
   }
   // Look up interfaces
   if (m == NULL) {
-    m = lookup_method_in_all_interfaces(name, signature, find_defaults);
+    m = lookup_method_in_all_interfaces(name, signature, DefaultsLookupMode::find);
   }
   return m;
 }
@@ -1957,7 +2033,7 @@ Method* InstanceKlass::lookup_method_in_all_interfaces(Symbol* name,
     ik = all_ifs->at(i);
     Method* m = ik->lookup_method(name, signature);
     if (m != NULL && m->is_public() && !m->is_static() &&
-        ((defaults_mode != skip_defaults) || !m->is_default_method())) {
+        ((defaults_mode != DefaultsLookupMode::skip) || !m->is_default_method())) {
       return m;
     }
   }
@@ -2414,6 +2490,7 @@ void InstanceKlass::metaspace_pointers_do(MetaspaceClosure* it) {
   }
 
   it->push(&_nest_members);
+  it->push(&_permitted_subclasses);
   it->push(&_record_components);
 }
 
@@ -2494,15 +2571,21 @@ void InstanceKlass::restore_unshareable_info(ClassLoaderData* loader_data, Handl
   for (int index = 0; index < num_methods; ++index) {
     methods->at(index)->restore_unshareable_info(CHECK);
   }
+#if INCLUDE_JVMTI
   if (JvmtiExport::has_redefined_a_class()) {
     // Reinitialize vtable because RedefineClasses may have changed some
     // entries in this vtable for super classes so the CDS vtable might
     // point to old or obsolete entries.  RedefineClasses doesn't fix up
     // vtables in the shared system dictionary, only the main one.
     // It also redefines the itable too so fix that too.
+    // First fix any default methods that point to a super class that may
+    // have been redefined.
+    bool trace_name_printed = false;
+    adjust_default_methods(&trace_name_printed);
     vtable().initialize_vtable(false, CHECK);
     itable().initialize_itable(false, CHECK);
   }
+#endif
 
   // restore constant pool resolved references
   constants()->restore_unshareable_info(CHECK);
@@ -2533,6 +2616,19 @@ void InstanceKlass::set_shared_class_loader_type(s2 loader_type) {
   default:
     ShouldNotReachHere();
     break;
+  }
+}
+
+void InstanceKlass::assign_class_loader_type() {
+  ClassLoaderData *cld = class_loader_data();
+  if (cld->is_boot_class_loader_data()) {
+    set_shared_class_loader_type(ClassLoader::BOOT_LOADER);
+  }
+  else if (cld->is_platform_class_loader_data()) {
+    set_shared_class_loader_type(ClassLoader::PLATFORM_LOADER);
+  }
+  else if (cld->is_system_class_loader_data()) {
+    set_shared_class_loader_type(ClassLoader::APP_LOADER);
   }
 }
 
@@ -2738,7 +2834,17 @@ void InstanceKlass::set_package(ClassLoaderData* loader_data, PackageEntry* pkg_
     check_prohibited_package(name(), loader_data, CHECK);
   }
 
-  TempNewSymbol pkg_name = pkg_entry != NULL ? pkg_entry->name() : ClassLoader::package_from_class_name(name());
+  // ClassLoader::package_from_class_name has already incremented the refcount of the symbol
+  // it returns, so we need to decrement it when the current function exits.
+  TempNewSymbol from_class_name =
+      (pkg_entry != NULL) ? NULL : ClassLoader::package_from_class_name(name());
+
+  Symbol* pkg_name;
+  if (pkg_entry != NULL) {
+    pkg_name = pkg_entry->name();
+  } else {
+    pkg_name = from_class_name;
+  }
 
   if (pkg_name != NULL && loader_data != NULL) {
 
@@ -2872,24 +2978,16 @@ bool InstanceKlass::is_same_class_package(oop other_class_loader,
   }
 }
 
-// Returns true iff super_method can be overridden by a method in targetclassname
-// See JLS 3rd edition 8.4.6.1
-// Assumes name-signature match
-// "this" is InstanceKlass of super_method which must exist
-// note that the InstanceKlass of the method in the targetclassname has not always been created yet
-bool InstanceKlass::is_override(const methodHandle& super_method, Handle targetclassloader, Symbol* targetclassname, TRAPS) {
-   // Private methods can not be overridden
-   if (super_method->is_private()) {
-     return false;
-   }
-   // If super method is accessible, then override
-   if ((super_method->is_protected()) ||
-       (super_method->is_public())) {
-     return true;
-   }
-   // Package-private methods are not inherited outside of package
-   assert(super_method->is_package_private(), "must be package private");
-   return(is_same_class_package(targetclassloader(), targetclassname));
+static bool is_prohibited_package_slow(Symbol* class_name) {
+  // Caller has ResourceMark
+  int length;
+  jchar* unicode = class_name->as_unicode(length);
+  return (length >= 5 &&
+          unicode[0] == 'j' &&
+          unicode[1] == 'a' &&
+          unicode[2] == 'v' &&
+          unicode[3] == 'a' &&
+          unicode[4] == '/');
 }
 
 // Only boot and platform class loaders can define classes in "java/" packages.
@@ -2898,13 +2996,20 @@ void InstanceKlass::check_prohibited_package(Symbol* class_name,
                                              TRAPS) {
   if (!loader_data->is_boot_class_loader_data() &&
       !loader_data->is_platform_class_loader_data() &&
-      class_name != NULL) {
+      class_name != NULL && class_name->utf8_length() >= 5) {
     ResourceMark rm(THREAD);
-    char* name = class_name->as_C_string();
-    if (strncmp(name, JAVAPKG, JAVAPKG_LEN) == 0 && name[JAVAPKG_LEN] == '/') {
+    bool prohibited;
+    const u1* base = class_name->base();
+    if ((base[0] | base[1] | base[2] | base[3] | base[4]) & 0x80) {
+      prohibited = is_prohibited_package_slow(class_name);
+    } else {
+      char* name = class_name->as_C_string();
+      prohibited = (strncmp(name, JAVAPKG, JAVAPKG_LEN) == 0 && name[JAVAPKG_LEN] == '/');
+    }
+    if (prohibited) {
       TempNewSymbol pkg_name = ClassLoader::package_from_class_name(class_name);
       assert(pkg_name != NULL, "Error in parsing package name starting with 'java/'");
-      name = pkg_name->as_C_string();
+      char* name = pkg_name->as_C_string();
       const char* class_loader_name = loader_data->loader_name_and_id();
       StringUtils::replace_no_expand(name, "/", ".");
       const char* msg_text1 = "Class loader (instance of): ";
@@ -3087,9 +3192,9 @@ void InstanceKlass::add_osr_nmethod(nmethod* n) {
   assert_lock_strong(CompiledMethod_lock);
 #ifndef PRODUCT
   if (TieredCompilation) {
-      nmethod * prev = lookup_osr_nmethod(n->method(), n->osr_entry_bci(), n->comp_level(), true);
-      assert(prev == NULL || !prev->is_in_use(),
-      "redundunt OSR recompilation detected. memory leak in CodeCache!");
+    nmethod* prev = lookup_osr_nmethod(n->method(), n->osr_entry_bci(), n->comp_level(), true);
+    assert(prev == NULL || !prev->is_in_use() COMPILER2_PRESENT(|| StressRecompilation),
+           "redundant OSR recompilation detected. memory leak in CodeCache!");
   }
 #endif
   // only one compilation can be active
@@ -3342,6 +3447,7 @@ void InstanceKlass::print_on(outputStream* st) const {
   if (record_components() != NULL) {
     st->print(BULLET"record components:     "); record_components()->print_value_on(st);     st->cr();
   }
+  st->print(BULLET"permitted subclasses:     "); permitted_subclasses()->print_value_on(st);     st->cr();
   if (java_mirror() != NULL) {
     st->print(BULLET"java mirror:       ");
     java_mirror()->print_value_on(st);
@@ -3486,9 +3592,19 @@ void InstanceKlass::oop_print_value_on(oop obj, outputStream* st) {
       st->print(" = ");
       vmtarget->print_value_on(st);
     } else {
-      java_lang_invoke_MemberName::clazz(obj)->print_value_on(st);
+      oop clazz = java_lang_invoke_MemberName::clazz(obj);
+      oop name  = java_lang_invoke_MemberName::name(obj);
+      if (clazz != NULL) {
+        clazz->print_value_on(st);
+      } else {
+        st->print("NULL");
+      }
       st->print(".");
-      java_lang_invoke_MemberName::name(obj)->print_value_on(st);
+      if (name != NULL) {
+        name->print_value_on(st);
+      } else {
+        st->print("NULL");
+      }
     }
   }
 }
@@ -3498,8 +3614,10 @@ const char* InstanceKlass::internal_name() const {
 }
 
 void InstanceKlass::print_class_load_logging(ClassLoaderData* loader_data,
-                                             const char* module_name,
+                                             const ModuleEntry* module_entry,
                                              const ClassFileStream* cfs) const {
+  log_to_classlist(cfs);
+
   if (!log_is_enabled(Info, class, load)) {
     return;
   }
@@ -3514,6 +3632,7 @@ void InstanceKlass::print_class_load_logging(ClassLoaderData* loader_data,
   // Source
   if (cfs != NULL) {
     if (cfs->source() != NULL) {
+      const char* module_name = (module_entry->name() == NULL) ? UNNAMED_MODULE : module_entry->name()->as_C_string();
       if (module_name != NULL) {
         // When the boot loader created the stream, it didn't know the module name
         // yet. Let's format it now.
@@ -3529,7 +3648,7 @@ void InstanceKlass::print_class_load_logging(ClassLoaderData* loader_data,
       Thread* THREAD = Thread::current();
       Klass* caller =
             THREAD->is_Java_thread()
-                ? ((JavaThread*)THREAD)->security_get_caller_class(1)
+                ? THREAD->as_Java_thread()->security_get_caller_class(1)
                 : NULL;
       // caller can be NULL, for example, during a JVMTI VM_Init hook
       if (caller != NULL) {
@@ -3855,8 +3974,9 @@ void InstanceKlass::purge_previous_version_list() {
       InstanceKlass* next = pv_node->previous_versions();
       pv_node->link_previous_versions(NULL);   // point next to NULL
       last->link_previous_versions(next);
-      // Add to the deallocate list after unlinking
-      loader_data->add_to_deallocate_list(pv_node);
+      // Delete this node directly. Nothing is referring to it and we don't
+      // want it to increase the counter for metadata to delete in CLDG.
+      MetadataFactory::free_metadata(loader_data, pv_node);
       pv_node = next;
       deleted_count++;
       version++;
@@ -4088,3 +4208,58 @@ unsigned char * InstanceKlass::get_cached_class_file_bytes() {
   return VM_RedefineClasses::get_cached_class_file_bytes(_cached_class_file);
 }
 #endif
+
+void InstanceKlass::log_to_classlist(const ClassFileStream* stream) const {
+#if INCLUDE_CDS
+  if (ClassListWriter::is_enabled()) {
+    if (!ClassLoader::has_jrt_entry()) {
+       warning("DumpLoadedClassList and CDS are not supported in exploded build");
+       DumpLoadedClassList = NULL;
+       return;
+    }
+    ClassLoaderData* loader_data = class_loader_data();
+    if (!SystemDictionaryShared::is_sharing_possible(loader_data)) {
+      return;
+    }
+    bool skip = false;
+    if (is_shared()) {
+      assert(stream == NULL, "shared class with stream");
+      if (is_hidden()) {
+        // Don't include archived lambda proxy class in the classlist.
+        assert(!is_non_strong_hidden(), "unexpected non-strong hidden class");
+        return;
+      }
+    } else {
+      assert(stream != NULL, "non-shared class without stream");
+      // skip hidden class and unsafe anonymous class.
+      if ( is_hidden() || unsafe_anonymous_host() != NULL) {
+        return;
+      }
+      oop class_loader = loader_data->class_loader();
+      if (class_loader == NULL || SystemDictionary::is_platform_class_loader(class_loader)) {
+        // For the boot and platform class loaders, skip classes that are not found in the
+        // java runtime image, such as those found in the --patch-module entries.
+        // These classes can't be loaded from the archive during runtime.
+        if (!stream->from_boot_loader_modules_image() && strncmp(stream->source(), "jrt:", 4) != 0) {
+          skip = true;
+        }
+
+        if (class_loader == NULL && ClassLoader::contains_append_entry(stream->source())) {
+          // .. but don't skip the boot classes that are loaded from -Xbootclasspath/a
+          // as they can be loaded from the archive during runtime.
+          skip = false;
+        }
+      }
+    }
+    ResourceMark rm;
+    if (skip) {
+      tty->print_cr("skip writing class %s from source %s to classlist file",
+                    name()->as_C_string(), stream->source());
+    } else {
+      ClassListWriter w;
+      w.stream()->print_cr("%s", name()->as_C_string());
+      w.stream()->flush();
+    }
+  }
+#endif // INCLUDE_CDS
+}

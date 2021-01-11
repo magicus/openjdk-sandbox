@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@ import java.io.FileDescriptor;
 import java.lang.ref.Reference;
 import java.util.Objects;
 import jdk.internal.access.foreign.MemorySegmentProxy;
+import jdk.internal.misc.ScopedMemoryAccess.Scope;
 import jdk.internal.misc.VM;
 import jdk.internal.ref.Cleaner;
 import sun.nio.ch.DirectBuffer;
@@ -153,6 +154,15 @@ class Direct$Type$Buffer$RW$$BO$
         att = ob;
     }
 
+    // Invoked to construct a direct ByteBuffer referring to the block of
+    // memory. A given arbitrary object may also be attached to the buffer.
+    //
+    Direct$Type$Buffer(long addr, int cap, Object ob, FileDescriptor fd, boolean isSync, MemorySegmentProxy segment) {
+        super(-1, 0, cap, cap, fd, isSync, segment);
+        address = addr;
+        cleaner = null;
+        att = ob;
+    }
 
     // Invoked only by JNI: NewDirectByteBuffer(void*, long)
     //
@@ -255,6 +265,17 @@ class Direct$Type$Buffer$RW$$BO$
 #if[rw]
 
     public long address() {
+        Scope scope = scope();
+        if (scope != null) {
+            if (scope.ownerThread() == null) {
+                throw new UnsupportedOperationException("ByteBuffer derived from shared segments not supported");
+            }
+            try {
+                scope.checkValidState();
+            } catch (Scope.ScopedAccessError e) {
+                throw new IllegalStateException("This segment is already closed");
+            }
+        }
         return address;
     }
 
@@ -264,8 +285,7 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $type$ get() {
         try {
-            checkSegment();
-            return $fromBits$($swap$(UNSAFE.get$Swaptype$(ix(nextGetIndex()))));
+            return $fromBits$($swap$(SCOPED_MEMORY_ACCESS.get$Swaptype$(scope(), null, ix(nextGetIndex()))));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -273,8 +293,7 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $type$ get(int i) {
         try {
-            checkSegment();
-            return $fromBits$($swap$(UNSAFE.get$Swaptype$(ix(checkIndex(i)))));
+            return $fromBits$($swap$(SCOPED_MEMORY_ACCESS.get$Swaptype$(scope(), null, ix(checkIndex(i)))));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -283,7 +302,7 @@ class Direct$Type$Buffer$RW$$BO$
 #if[streamableType]
     $type$ getUnchecked(int i) {
         try {
-            return $fromBits$($swap$(UNSAFE.get$Swaptype$(ix(i))));
+            return $fromBits$($swap$(SCOPED_MEMORY_ACCESS.get$Swaptype$(null, null, ix(i))));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -292,7 +311,6 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $Type$Buffer get($type$[] dst, int offset, int length) {
 #if[rw]
-        checkSegment();
         if (((long)length << $LG_BYTES_PER_VALUE$) > Bits.JNI_COPY_TO_ARRAY_THRESHOLD) {
             Objects.checkFromIndexSize(offset, length, dst.length);
             int pos = position();
@@ -306,7 +324,7 @@ class Direct$Type$Buffer$RW$$BO$
             try {
 #if[!byte]
                 if (order() != ByteOrder.nativeOrder())
-                    UNSAFE.copySwapMemory(null,
+                    SCOPED_MEMORY_ACCESS.copySwapMemory(scope(), null, null,
                                           ix(pos),
                                           dst,
                                           dstOffset,
@@ -314,7 +332,7 @@ class Direct$Type$Buffer$RW$$BO$
                                           (long)1 << $LG_BYTES_PER_VALUE$);
                 else
 #end[!byte]
-                    UNSAFE.copyMemory(null,
+                    SCOPED_MEMORY_ACCESS.copyMemory(scope(), null, null,
                                       ix(pos),
                                       dst,
                                       dstOffset,
@@ -334,7 +352,6 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $Type$Buffer get(int index, $type$[] dst, int offset, int length) {
 #if[rw]
-        checkSegment();
         if (((long)length << $LG_BYTES_PER_VALUE$) > Bits.JNI_COPY_TO_ARRAY_THRESHOLD) {
             Objects.checkFromIndexSize(index, length, limit());
             Objects.checkFromIndexSize(offset, length, dst.length);
@@ -343,7 +360,7 @@ class Direct$Type$Buffer$RW$$BO$
             try {
 #if[!byte]
                 if (order() != ByteOrder.nativeOrder())
-                    UNSAFE.copySwapMemory(null,
+                    SCOPED_MEMORY_ACCESS.copySwapMemory(scope(), null, null,
                                           ix(index),
                                           dst,
                                           dstOffset,
@@ -351,7 +368,7 @@ class Direct$Type$Buffer$RW$$BO$
                                           (long)1 << $LG_BYTES_PER_VALUE$);
                 else
 #end[!byte]
-                    UNSAFE.copyMemory(null,
+                    SCOPED_MEMORY_ACCESS.copyMemory(scope(), null, null,
                                       ix(index),
                                       dst,
                                       dstOffset,
@@ -372,8 +389,7 @@ class Direct$Type$Buffer$RW$$BO$
     public $Type$Buffer put($type$ x) {
 #if[rw]
         try {
-            checkSegment();
-            UNSAFE.put$Swaptype$(ix(nextPutIndex()), $swap$($toBits$(x)));
+            SCOPED_MEMORY_ACCESS.put$Swaptype$(scope(), null, ix(nextPutIndex()), $swap$($toBits$(x)));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -386,8 +402,7 @@ class Direct$Type$Buffer$RW$$BO$
     public $Type$Buffer put(int i, $type$ x) {
 #if[rw]
         try {
-            checkSegment();
-            UNSAFE.put$Swaptype$(ix(checkIndex(i)), $swap$($toBits$(x)));
+            SCOPED_MEMORY_ACCESS.put$Swaptype$(scope(), null, ix(checkIndex(i)), $swap$($toBits$(x)));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -399,45 +414,16 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $Type$Buffer put($Type$Buffer src) {
 #if[rw]
-        checkSegment();
-        if (src instanceof Direct$Type$Buffer$BO$) {
-            if (src == this)
-                throw createSameBufferException();
-            Direct$Type$Buffer$RW$$BO$ sb = (Direct$Type$Buffer$RW$$BO$)src;
+        super.put(src);
+        return this;
+#else[rw]
+        throw new ReadOnlyBufferException();
+#end[rw]
+    }
 
-            int spos = sb.position();
-            int slim = sb.limit();
-            assert (spos <= slim);
-            int srem = (spos <= slim ? slim - spos : 0);
-
-            int pos = position();
-            int lim = limit();
-            assert (pos <= lim);
-            int rem = (pos <= lim ? lim - pos : 0);
-
-            if (srem > rem)
-                throw new BufferOverflowException();
-            try {
-                UNSAFE.copyMemory(sb.ix(spos), ix(pos), (long)srem << $LG_BYTES_PER_VALUE$);
-            } finally {
-                Reference.reachabilityFence(sb);
-                Reference.reachabilityFence(this);
-            }
-            sb.position(spos + srem);
-            position(pos + srem);
-        } else if (src.hb != null) {
-
-            int spos = src.position();
-            int slim = src.limit();
-            assert (spos <= slim);
-            int srem = (spos <= slim ? slim - spos : 0);
-
-            put(src.hb, src.offset + spos, srem);
-            src.position(spos + srem);
-
-        } else {
-            super.put(src);
-        }
+    public $Type$Buffer put(int index, $Type$Buffer src, int offset, int length) {
+#if[rw]
+        super.put(index, src, offset, length);
         return this;
 #else[rw]
         throw new ReadOnlyBufferException();
@@ -446,7 +432,6 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $Type$Buffer put($type$[] src, int offset, int length) {
 #if[rw]
-        checkSegment();
         if (((long)length << $LG_BYTES_PER_VALUE$) > Bits.JNI_COPY_FROM_ARRAY_THRESHOLD) {
             Objects.checkFromIndexSize(offset, length, src.length);
             int pos = position();
@@ -460,7 +445,7 @@ class Direct$Type$Buffer$RW$$BO$
             try {
 #if[!byte]
                 if (order() != ByteOrder.nativeOrder())
-                    UNSAFE.copySwapMemory(src,
+                    SCOPED_MEMORY_ACCESS.copySwapMemory(scope(), null, src,
                                           srcOffset,
                                           null,
                                           ix(pos),
@@ -468,7 +453,7 @@ class Direct$Type$Buffer$RW$$BO$
                                           (long)1 << $LG_BYTES_PER_VALUE$);
                 else
 #end[!byte]
-                    UNSAFE.copyMemory(src,
+                    SCOPED_MEMORY_ACCESS.copyMemory(scope(), null, src,
                                       srcOffset,
                                       null,
                                       ix(pos),
@@ -488,7 +473,6 @@ class Direct$Type$Buffer$RW$$BO$
 
     public $Type$Buffer put(int index, $type$[] src, int offset, int length) {
 #if[rw]
-        checkSegment();
         if (((long)length << $LG_BYTES_PER_VALUE$) > Bits.JNI_COPY_FROM_ARRAY_THRESHOLD) {
             Objects.checkFromIndexSize(index, length, limit());
             Objects.checkFromIndexSize(offset, length, src.length);
@@ -498,7 +482,7 @@ class Direct$Type$Buffer$RW$$BO$
             try {
 #if[!byte]
                 if (order() != ByteOrder.nativeOrder())
-                    UNSAFE.copySwapMemory(src,
+                    SCOPED_MEMORY_ACCESS.copySwapMemory(scope(), null, src,
                                           srcOffset,
                                           null,
                                           ix(index),
@@ -506,11 +490,9 @@ class Direct$Type$Buffer$RW$$BO$
                                           (long)1 << $LG_BYTES_PER_VALUE$);
                 else
 #end[!byte]
-                    UNSAFE.copyMemory(src,
-                                      srcOffset,
-                                      null,
-                                      ix(index),
-                                      (long)length << $LG_BYTES_PER_VALUE$);
+                    SCOPED_MEMORY_ACCESS.copyMemory(
+                            scope(), null, src,
+                            srcOffset, null, ix(index), (long)length << $LG_BYTES_PER_VALUE$);
             } finally {
                 Reference.reachabilityFence(this);
             }
@@ -530,7 +512,8 @@ class Direct$Type$Buffer$RW$$BO$
         assert (pos <= lim);
         int rem = (pos <= lim ? lim - pos : 0);
         try {
-            UNSAFE.copyMemory(ix(pos), ix(0), (long)rem << $LG_BYTES_PER_VALUE$);
+            SCOPED_MEMORY_ACCESS.copyMemory(scope(), null, null,
+                    ix(pos), null, ix(0), (long)rem << $LG_BYTES_PER_VALUE$);
         } finally {
             Reference.reachabilityFence(this);
         }

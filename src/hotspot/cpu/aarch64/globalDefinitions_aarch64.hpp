@@ -56,8 +56,15 @@ const bool CCallingConventionRequiresIntsAsLongs = false;
 
 #define SUPPORT_RESERVED_STACK_AREA
 
-#define PREFERRED_METASPACE_ALIGNMENT
+#define COMPRESSED_CLASS_POINTERS_DEPENDS_ON_COMPRESSED_OOPS false
 
-#define COMPRESSED_CLASS_POINTERS_DEPENDS_ON_COMPRESSED_OOPS true
+#if defined(_WIN64)
+#define R18_RESERVED
+#define R18_RESERVED_ONLY(code) code
+#define NOT_R18_RESERVED(code)
+#else
+#define R18_RESERVED_ONLY(code)
+#define NOT_R18_RESERVED(code) code
+#endif
 
 #endif // CPU_AARCH64_GLOBALDEFINITIONS_AARCH64_HPP

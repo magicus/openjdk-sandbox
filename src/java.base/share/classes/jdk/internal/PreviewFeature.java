@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,7 +54,6 @@ public @interface PreviewFeature {
     public boolean essentialAPI() default false;
 
     public enum Feature {
-        PATTERN_MATCHING_IN_INSTANCEOF,
         // 8242284:
         // The TEXT_BLOCKS enum constant is not used in the JDK 15 codebase, but
         // exists to support the bootcycle build of JDK 15. The bootcycle build
@@ -62,7 +61,13 @@ public @interface PreviewFeature {
         // JDK 15. Since the JDK 14 codebase uses the enum constant, it is
         // necessary for PreviewFeature in JDK 15 to declare the enum constant.
         TEXT_BLOCKS,
+        // The RECORDS enum constant is not used in the JDK 16 codebase, but
+        // exists to support the bootcycle build of JDK 16. The bootcycle build
+        // of JDK 16 is performed with JDK 15 and the PreviewFeature type from
+        // JDK 16. Since the JDK 15 codebase uses the enum constant, it is
+        // necessary for PreviewFeature in JDK 16 to declare the enum constant.
         RECORDS,
+        SEALED_CLASSES,
         ;
     }
 }

@@ -40,6 +40,7 @@
 #include "opto/phase.hpp"
 #include "opto/regmask.hpp"
 #include "runtime/deoptimization.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "runtime/timerTrace.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/ticks.hpp"
@@ -69,7 +70,6 @@ class PhaseGVN;
 class PhaseIterGVN;
 class PhaseRegAlloc;
 class PhaseCCP;
-class PhaseCCP_DCE;
 class PhaseOutput;
 class RootNode;
 class relocInfo;
@@ -246,6 +246,7 @@ class Compile : public Phase {
   const bool            _save_argument_registers; // save/restore arg regs for trampolines
   const bool            _subsume_loads;         // Load can be matched as part of a larger op.
   const bool            _do_escape_analysis;    // Do escape analysis.
+  const bool            _install_code;          // Install the code that was compiled
   const bool            _eliminate_boxing;      // Do boxing elimination.
   ciMethod*             _method;                // The method being compiled.
   int                   _entry_bci;             // entry bci for osr methods.
@@ -261,6 +262,8 @@ class Compile : public Phase {
   int                   _fixed_slots;           // count of frame slots not allocated by the register
                                                 // allocator i.e. locks, original deopt pc, etc.
   uintx                 _max_node_limit;        // Max unique node count during a single compilation.
+
+  bool                  _post_loop_opts_phase;  // Loop opts are finished.
 
   int                   _major_progress;        // Count of something big happening
   bool                  _inlining_progress;     // progress doing incremental inlining?
@@ -280,8 +283,6 @@ class Compile : public Phase {
   bool                  _do_inlining;           // True if we intend to do inlining
   bool                  _do_scheduling;         // True if we intend to do scheduling
   bool                  _do_freq_based_layout;  // True if we intend to do frequency based block layout
-  bool                  _do_count_invocations;  // True if we generate code to count invocations
-  bool                  _do_method_data_update; // True if we generate code to update MethodData*s
   bool                  _do_vector_loop;        // True if allowed to execute loop in parallel iterations
   bool                  _use_cmove;             // True if CMove should be used without profitability analysis
   bool                  _age_code;              // True if we need to profile code age (decrement the aging counter)
@@ -300,6 +301,7 @@ class Compile : public Phase {
   RTMState              _rtm_state;             // State of Restricted Transactional Memory usage
   int                   _loop_opts_cnt;         // loop opts round
   bool                  _clinit_barrier_on_entry; // True if clinit barrier is needed on nmethod entry
+  uint                  _stress_seed;           // Seed for stress testing
 
   // Compilation environment.
   Arena                 _comp_arena;            // Arena with lifetime equivalent to Compile
@@ -308,12 +310,11 @@ class Compile : public Phase {
   DirectiveSet*         _directive;             // Compiler directive
   CompileLog*           _log;                   // from CompilerThread
   const char*           _failure_reason;        // for record_failure/failing pattern
-  GrowableArray<CallGenerator*>* _intrinsics;   // List of intrinsics.
-  GrowableArray<Node*>* _macro_nodes;           // List of nodes which need to be expanded before matching.
-  GrowableArray<Node*>* _predicate_opaqs;       // List of Opaque1 nodes for the loop predicates.
-  GrowableArray<Node*>* _expensive_nodes;       // List of nodes that are expensive to compute and that we'd better not let the GVN freely common
-  GrowableArray<Node*>* _range_check_casts;     // List of CastII nodes with a range check dependency
-  GrowableArray<Node*>* _opaque4_nodes;         // List of Opaque4 nodes that have a default value
+  GrowableArray<CallGenerator*> _intrinsics;    // List of intrinsics.
+  GrowableArray<Node*>  _macro_nodes;           // List of nodes which need to be expanded before matching.
+  GrowableArray<Node*>  _predicate_opaqs;       // List of Opaque1 nodes for the loop predicates.
+  GrowableArray<Node*>  _expensive_nodes;       // List of nodes that are expensive to compute and that we'd better not let the GVN freely common
+  GrowableArray<Node*>  _for_post_loop_igvn;    // List of nodes for IGVN after loop opts are over
   ConnectionGraph*      _congraph;
 #ifndef PRODUCT
   IdealGraphPrinter*    _printer;
@@ -327,7 +328,8 @@ class Compile : public Phase {
   VectorSet             _dead_node_list;        // Set of dead nodes
   uint                  _dead_node_count;       // Number of dead nodes; VectorSet::Size() is O(N).
                                                 // So use this to keep count and make the call O(1).
-  DEBUG_ONLY( Unique_Node_List* _modified_nodes; )  // List of nodes which inputs were modified
+  DEBUG_ONLY(Unique_Node_List* _modified_nodes;)   // List of nodes which inputs were modified
+  DEBUG_ONLY(bool       _phase_optimize_finished;) // Used for live node verification while creating new nodes
 
   debug_only(static int _debug_idx;)            // Monotonic counter (not reset), use -XX:BreakAtNode=<idx>
   Arena                 _node_arena;            // Arena for new-space Nodes
@@ -374,15 +376,16 @@ class Compile : public Phase {
   Unique_Node_List*     _for_igvn;              // Initial work-list for next round of Iterative GVN
   WarmCallInfo*         _warm_calls;            // Sorted work-list for heat-based inlining.
 
-  GrowableArray<CallGenerator*> _late_inlines;        // List of CallGenerators to be revisited after
-                                                      // main parsing has finished.
+  GrowableArray<CallGenerator*> _late_inlines;        // List of CallGenerators to be revisited after main parsing has finished.
   GrowableArray<CallGenerator*> _string_late_inlines; // same but for string operations
-
   GrowableArray<CallGenerator*> _boxing_late_inlines; // same but for boxing operations
+
+  GrowableArray<CallGenerator*> _vector_reboxing_late_inlines; // same but for vector reboxing operations
 
   int                           _late_inlines_pos;    // Where in the queue should the next late inlining candidate go (emulate depth first inlining)
   uint                          _number_of_mh_late_inlines; // number of method handle late inlining still pending
 
+  GrowableArray<BufferBlob*>    _native_invokers;
 
   // Inlining may not happen in parse order which would make
   // PrintInlining output confusing. Keep track of PrintInlining
@@ -427,6 +430,7 @@ class Compile : public Phase {
   PrintInliningBuffer& print_inlining_current();
 
   void log_late_inline_failure(CallGenerator* cg, const char* msg);
+  DEBUG_ONLY(bool _exception_backedge;)
 
  public:
 
@@ -506,7 +510,7 @@ class Compile : public Phase {
   /** Do aggressive boxing elimination. */
   bool              aggressive_unboxing() const { return _eliminate_boxing && AggressiveUnboxing; }
   bool              save_argument_registers() const { return _save_argument_registers; }
-
+  bool              should_install_code() const { return _install_code; }
 
   // Other fixed compilation parameters.
   ciMethod*         method() const              { return _method; }
@@ -567,10 +571,6 @@ class Compile : public Phase {
   void          set_do_scheduling(bool z)       { _do_scheduling = z; }
   bool              do_freq_based_layout() const{ return _do_freq_based_layout; }
   void          set_do_freq_based_layout(bool z){ _do_freq_based_layout = z; }
-  bool              do_count_invocations() const{ return _do_count_invocations; }
-  void          set_do_count_invocations(bool z){ _do_count_invocations = z; }
-  bool              do_method_data_update() const { return _do_method_data_update; }
-  void          set_do_method_data_update(bool z) { _do_method_data_update = z; }
   bool              do_vector_loop() const      { return _do_vector_loop; }
   void          set_do_vector_loop(bool z)      { _do_vector_loop = z; }
   bool              use_cmove() const           { return _use_cmove; }
@@ -594,7 +594,7 @@ class Compile : public Phase {
   void          set_clinit_barrier_on_entry(bool z) { _clinit_barrier_on_entry = z; }
 
   // check the CompilerOracle for special behaviours for this compile
-  bool          method_has_option(const char * option) {
+  bool          method_has_option(enum CompileCommand option) {
     return method() != NULL && method()->has_option(option);
   }
 
@@ -614,9 +614,9 @@ class Compile : public Phase {
 
   Ticks _latest_stage_start_counter;
 
-  void begin_method() {
+  void begin_method(int level = 1) {
 #ifndef PRODUCT
-    if (_printer && _printer->should_print(1)) {
+    if (_method != NULL && should_print(level)) {
       _printer->begin_method();
     }
 #endif
@@ -625,13 +625,25 @@ class Compile : public Phase {
 
   bool should_print(int level = 1) {
 #ifndef PRODUCT
-    return (_printer && _printer->should_print(level));
+    if (PrintIdealGraphLevel < 0) { // disabled by the user
+      return false;
+    }
+
+    bool need = directive()->IGVPrintLevelOption >= level;
+    if (need && !_printer) {
+      _printer = IdealGraphPrinter::printer();
+      assert(_printer != NULL, "_printer is NULL when we need it!");
+      _printer->set_compile(this);
+    }
+    return need;
 #else
     return false;
 #endif
   }
 
+  void print_method(CompilerPhaseType cpt, const char *name, int level = 1, int idx = 0);
   void print_method(CompilerPhaseType cpt, int level = 1, int idx = 0);
+  void print_method(CompilerPhaseType cpt, Node* n, int level = 3);
 
 #ifndef PRODUCT
   void igv_print_method_to_file(const char* phase_name = "Debug", bool append = false);
@@ -642,70 +654,54 @@ class Compile : public Phase {
 
   void end_method(int level = 1);
 
-  int           macro_count()             const { return _macro_nodes->length(); }
-  int           predicate_count()         const { return _predicate_opaqs->length();}
-  int           expensive_count()         const { return _expensive_nodes->length(); }
-  Node*         macro_node(int idx)       const { return _macro_nodes->at(idx); }
-  Node*         predicate_opaque1_node(int idx) const { return _predicate_opaqs->at(idx);}
-  Node*         expensive_node(int idx)   const { return _expensive_nodes->at(idx); }
+  int           macro_count()             const { return _macro_nodes.length(); }
+  int           predicate_count()         const { return _predicate_opaqs.length();}
+  int           expensive_count()         const { return _expensive_nodes.length(); }
+
+  Node*         macro_node(int idx)       const { return _macro_nodes.at(idx); }
+  Node*         predicate_opaque1_node(int idx) const { return _predicate_opaqs.at(idx);}
+  Node*         expensive_node(int idx)   const { return _expensive_nodes.at(idx); }
+
   ConnectionGraph* congraph()                   { return _congraph;}
   void set_congraph(ConnectionGraph* congraph)  { _congraph = congraph;}
   void add_macro_node(Node * n) {
     //assert(n->is_macro(), "must be a macro node");
-    assert(!_macro_nodes->contains(n), "duplicate entry in expand list");
-    _macro_nodes->append(n);
+    assert(!_macro_nodes.contains(n), "duplicate entry in expand list");
+    _macro_nodes.append(n);
   }
-  void remove_macro_node(Node * n) {
-    // this function may be called twice for a node so check
-    // that the node is in the array before attempting to remove it
-    if (_macro_nodes->contains(n))
-      _macro_nodes->remove(n);
+  void remove_macro_node(Node* n) {
+    // this function may be called twice for a node so we can only remove it
+    // if it's still existing.
+    _macro_nodes.remove_if_existing(n);
     // remove from _predicate_opaqs list also if it is there
-    if (predicate_count() > 0 && _predicate_opaqs->contains(n)){
-      _predicate_opaqs->remove(n);
+    if (predicate_count() > 0) {
+      _predicate_opaqs.remove_if_existing(n);
     }
   }
-  void add_expensive_node(Node * n);
-  void remove_expensive_node(Node * n) {
-    if (_expensive_nodes->contains(n)) {
-      _expensive_nodes->remove(n);
-    }
+  void add_expensive_node(Node* n);
+  void remove_expensive_node(Node* n) {
+    _expensive_nodes.remove_if_existing(n);
   }
-  void add_predicate_opaq(Node * n) {
-    assert(!_predicate_opaqs->contains(n), "duplicate entry in predicate opaque1");
-    assert(_macro_nodes->contains(n), "should have already been in macro list");
-    _predicate_opaqs->append(n);
+  void add_predicate_opaq(Node* n) {
+    assert(!_predicate_opaqs.contains(n), "duplicate entry in predicate opaque1");
+    assert(_macro_nodes.contains(n), "should have already been in macro list");
+    _predicate_opaqs.append(n);
   }
 
-  // Range check dependent CastII nodes that can be removed after loop optimizations
-  void add_range_check_cast(Node* n);
-  void remove_range_check_cast(Node* n) {
-    if (_range_check_casts->contains(n)) {
-      _range_check_casts->remove(n);
-    }
-  }
-  Node* range_check_cast_node(int idx) const { return _range_check_casts->at(idx);  }
-  int   range_check_cast_count()       const { return _range_check_casts->length(); }
-  // Remove all range check dependent CastIINodes.
-  void  remove_range_check_casts(PhaseIterGVN &igvn);
+  bool     post_loop_opts_phase() { return _post_loop_opts_phase; }
+  void set_post_loop_opts_phase() { _post_loop_opts_phase = true; }
 
-  void add_opaque4_node(Node* n);
-  void remove_opaque4_node(Node* n) {
-    if (_opaque4_nodes->contains(n)) {
-      _opaque4_nodes->remove(n);
-    }
-  }
-  Node* opaque4_node(int idx) const { return _opaque4_nodes->at(idx);  }
-  int   opaque4_count()       const { return _opaque4_nodes->length(); }
-  void  remove_opaque4_nodes(PhaseIterGVN &igvn);
+  void record_for_post_loop_opts_igvn(Node* n);
+  void remove_from_post_loop_opts_igvn(Node* n);
+  void process_for_post_loop_opts_igvn(PhaseIterGVN& igvn);
 
   void sort_macro_nodes();
 
   // remove the opaque nodes that protect the predicates so that the unused checks and
   // uncommon traps will be eliminated from the graph.
   void cleanup_loop_predicates(PhaseIterGVN &igvn);
-  bool is_predicate_opaq(Node * n) {
-    return _predicate_opaqs->contains(n);
+  bool is_predicate_opaq(Node* n) {
+    return _predicate_opaqs.contains(n);
   }
 
   // Are there candidate expensive nodes for optimization?
@@ -774,6 +770,8 @@ class Compile : public Phase {
             return (uint) val;
                                            }
 #ifdef ASSERT
+  void         set_phase_optimize_finished() { _phase_optimize_finished = true; }
+  bool         phase_optimize_finished() const { return _phase_optimize_finished; }
   uint         count_live_nodes_by_graph_walk();
   void         print_missing_nodes();
 #endif
@@ -854,13 +852,16 @@ class Compile : public Phase {
   // The profile factor is a discount to apply to this site's interp. profile.
   CallGenerator*    call_generator(ciMethod* call_method, int vtable_index, bool call_does_dispatch,
                                    JVMState* jvms, bool allow_inline, float profile_factor, ciKlass* speculative_receiver_type = NULL,
-                                   bool allow_intrinsics = true, bool delayed_forbidden = false);
+                                   bool allow_intrinsics = true);
   bool should_delay_inlining(ciMethod* call_method, JVMState* jvms) {
     return should_delay_string_inlining(call_method, jvms) ||
-           should_delay_boxing_inlining(call_method, jvms);
+           should_delay_boxing_inlining(call_method, jvms) ||
+           should_delay_vector_inlining(call_method, jvms);
   }
   bool should_delay_string_inlining(ciMethod* call_method, JVMState* jvms);
   bool should_delay_boxing_inlining(ciMethod* call_method, JVMState* jvms);
+  bool should_delay_vector_inlining(ciMethod* call_method, JVMState* jvms);
+  bool should_delay_vector_reboxing_inlining(ciMethod* call_method, JVMState* jvms);
 
   // Helper functions to identify inlining potential at call-site
   ciMethod* optimize_virtual_call(ciMethod* caller, int bci, ciInstanceKlass* klass,
@@ -932,7 +933,16 @@ class Compile : public Phase {
     _boxing_late_inlines.push(cg);
   }
 
+  void              add_vector_reboxing_late_inline(CallGenerator* cg) {
+    _vector_reboxing_late_inlines.push(cg);
+  }
+
+  void add_native_invoker(BufferBlob* stub);
+
+  const GrowableArray<BufferBlob*>& native_invokers() const { return _native_invokers; }
+
   void remove_useless_late_inlines(GrowableArray<CallGenerator*>* inlines, Unique_Node_List &useful);
+  void remove_useless_nodes       (GrowableArray<Node*>&        node_list, Unique_Node_List &useful);
 
   void process_print_inlining();
   void dump_print_inlining();
@@ -960,6 +970,9 @@ class Compile : public Phase {
   void inline_boxing_calls(PhaseIterGVN& igvn);
   bool optimize_loops(PhaseIterGVN& igvn, LoopOptsMode mode);
   void remove_root_to_sfpts_edges(PhaseIterGVN& igvn);
+
+  void inline_vector_reboxing_calls();
+  bool has_vbox_nodes();
 
   // Matching, CFG layout, allocation, code generation
   PhaseCFG*         cfg()                       { return _cfg; }
@@ -995,7 +1008,7 @@ class Compile : public Phase {
   // continuation.
   Compile(ciEnv* ci_env, ciMethod* target,
           int entry_bci, bool subsume_loads, bool do_escape_analysis,
-          bool eliminate_boxing, DirectiveSet* directive);
+          bool eliminate_boxing, bool install_code, DirectiveSet* directive);
 
   // Second major entry point.  From the TypeFunc signature, generate code
   // to pass arguments from the Java calling convention to the C calling
@@ -1004,14 +1017,6 @@ class Compile : public Phase {
           address stub_function, const char *stub_name,
           int is_fancy_jump, bool pass_tls,
           bool save_arg_registers, bool return_pc, DirectiveSet* directive);
-
-  // From the TypeFunc signature, generate code to pass arguments
-  // from Compiled calling convention to Interpreter's calling convention
-  void Generate_Compiled_To_Interpreter_Graph(const TypeFunc *tf, address interpreter_entry);
-
-  // From the TypeFunc signature, generate code to pass arguments
-  // from Interpreter's calling convention to Compiler's calling convention
-  void Generate_Interpreter_To_Compiled_Graph(const TypeFunc *tf);
 
   // Are we compiling a method?
   bool has_method() { return method() != NULL; }
@@ -1034,14 +1039,16 @@ class Compile : public Phase {
   // Stack slots that may be unused by the calling convention but must
   // otherwise be preserved.  On Intel this includes the return address.
   // On PowerPC it includes the 4 words holding the old TOC & LR glue.
-  uint in_preserve_stack_slots();
+  uint in_preserve_stack_slots() {
+    return SharedRuntime::in_preserve_stack_slots();
+  }
 
   // "Top of Stack" slots that may be unused by the calling convention but must
   // otherwise be preserved.
   // On Intel these are not necessary and the value can be zero.
-  // On Sparc this describes the words reserved for storing a register window
-  // when an interrupt occurs.
-  static uint out_preserve_stack_slots();
+  static uint out_preserve_stack_slots() {
+    return SharedRuntime::out_preserve_stack_slots();
+  }
 
   // Number of outgoing stack slots killed above the out_preserve_stack_slots
   // for calls to C.  Supports the var-args backing area for register parms.
@@ -1070,15 +1077,14 @@ class Compile : public Phase {
   void verify_top(Node*) const PRODUCT_RETURN;
 
   // Intrinsic setup.
-  void           register_library_intrinsics();                            // initializer
   CallGenerator* make_vm_intrinsic(ciMethod* m, bool is_virtual);          // constructor
   int            intrinsic_insertion_index(ciMethod* m, bool is_virtual, bool& found);  // helper
   CallGenerator* find_intrinsic(ciMethod* m, bool is_virtual);             // query fn
   void           register_intrinsic(CallGenerator* cg);                    // update fn
 
 #ifndef PRODUCT
-  static juint  _intrinsic_hist_count[vmIntrinsics::ID_LIMIT];
-  static jubyte _intrinsic_hist_flags[vmIntrinsics::ID_LIMIT];
+  static juint  _intrinsic_hist_count[];
+  static jubyte _intrinsic_hist_flags[];
 #endif
   // Function calls made by the public function final_graph_reshaping.
   // No need to be made public as they are not called elsewhere.
@@ -1138,8 +1144,9 @@ class Compile : public Phase {
   // Convert integer value to a narrowed long type dependent on ctrl (for example, a range check)
   static Node* constrained_convI2L(PhaseGVN* phase, Node* value, const TypeInt* itype, Node* ctrl);
 
-  // Auxiliary method for randomized fuzzing/stressing
-  static bool randomized_select(int count);
+  // Auxiliary methods for randomized fuzzing/stressing
+  int random();
+  bool randomized_select(int count);
 
   // supporting clone_map
   CloneMap&     clone_map();
@@ -1166,6 +1173,8 @@ class Compile : public Phase {
 #endif // IA32
 #ifdef ASSERT
   bool _type_verify_symmetry;
+  void set_exception_backedge() { _exception_backedge = true; }
+  bool has_exception_backedge() const { return _exception_backedge; }
 #endif
 };
 

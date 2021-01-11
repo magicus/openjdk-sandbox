@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -109,17 +109,20 @@ class klassVtable {
   void copy_vtable_to(vtableEntry* start);
   int  initialize_from_super(Klass* super);
   void put_method_at(Method* m, int index);
-  static bool needs_new_vtable_entry(const methodHandle& m,
+  static bool needs_new_vtable_entry(Method* m,
                                      const Klass* super,
                                      Handle classloader,
                                      Symbol* classname,
                                      AccessFlags access_flags,
-                                     u2 major_version,
-                                     TRAPS);
+                                     u2 major_version);
 
-  bool update_inherited_vtable(InstanceKlass* klass, const methodHandle& target_method, int super_vtable_len, int default_index, bool checkconstraints, TRAPS);
- InstanceKlass* find_transitive_override(InstanceKlass* initialsuper, const methodHandle& target_method, int vtable_index,
-                                         Handle target_loader, Symbol* target_classname, Thread* THREAD);
+  bool update_inherited_vtable(const methodHandle& target_method,
+                               int super_vtable_len,
+                               int default_index,
+                               bool checkconstraints, TRAPS);
+ InstanceKlass* find_transitive_override(InstanceKlass* initialsuper,
+                                         const methodHandle& target_method, int vtable_index,
+                                         Handle target_loader, Symbol* target_classname);
 
   // support for miranda methods
   bool is_miranda_entry_at(int i);
@@ -320,7 +323,7 @@ class klassItable {
 
   // Statistics
   NOT_PRODUCT(static int  _total_classes;)   // Total no. of classes with itables
-  NOT_PRODUCT(static long _total_size;)      // Total no. of bytes used for itables
+  NOT_PRODUCT(static size_t _total_size;)    // Total no. of bytes used for itables
 
   static void update_stats(int size) PRODUCT_RETURN NOT_PRODUCT({ _total_classes++; _total_size += size; })
 };

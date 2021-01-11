@@ -57,7 +57,8 @@ $(eval $(call SetupJavaCompilation, BUILD_TOOLS_JDK, \
     DISABLED_WARNINGS := options, \
     JAVAC_FLAGS := \
         --add-exports java.desktop/sun.awt=ALL-UNNAMED \
-        --add-exports java.base/sun.text=ALL-UNNAMED, \
+        --add-exports java.base/sun.text=ALL-UNNAMED \
+        --add-exports java.base/sun.security.util=ALL-UNNAMED, \
 ))
 
 TARGETS += $(BUILD_TOOLS_JDK)
@@ -105,8 +106,8 @@ ifeq ($(ENABLE_PANDOC), true)
       SOURCE_FILES := $(TOPDIR)/make/scripts/pandoc-troff-manpage-filter.sh.template, \
       OUTPUT_FILE := $(PANDOC_TROFF_MANPAGE_FILTER), \
       REPLACEMENTS := \
-          @@JJS@@ => $(JJS) ; \
-          @@TOPDIR@@ => $(TOPDIR) ; \
+          @@JAVA_SMALL@@ => $(JAVA_SMALL) ; \
+          @@BUILDTOOLS_OUTPUTDIR@@ => $(BUILDTOOLS_OUTPUTDIR) ; \
   ))
 
   # Created script must be made executable
@@ -128,8 +129,8 @@ ifeq ($(ENABLE_PANDOC), true)
       SOURCE_FILES := $(TOPDIR)/make/scripts/pandoc-html-manpage-filter.sh.template, \
       OUTPUT_FILE := $(PANDOC_HTML_MANPAGE_FILTER), \
       REPLACEMENTS := \
-          @@JJS@@ => $(JJS) ; \
-          @@TOPDIR@@ => $(TOPDIR) ; \
+          @@JAVA_SMALL@@ => $(JAVA_SMALL) ; \
+          @@BUILDTOOLS_OUTPUTDIR@@ => $(BUILDTOOLS_OUTPUTDIR) ; \
   ))
 
   # Created script must be made executable

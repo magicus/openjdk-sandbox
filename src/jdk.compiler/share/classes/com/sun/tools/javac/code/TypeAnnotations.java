@@ -548,6 +548,9 @@ public class TypeAnnotations {
          */
         private Type rewriteArrayType(ArrayType type, List<TypeCompound> annotations, TypeAnnotationPosition pos) {
             ArrayType tomodify = new ArrayType(type);
+            if (type.isVarargs()) {
+                tomodify = tomodify.makeVarargs();
+            }
             ArrayType res = tomodify;
 
             List<TypePathEntry> loc = List.nil();
@@ -948,9 +951,8 @@ public class TypeAnnotations {
                                                  " within frame " + frame);
                     }
 
-                case BINDING_PATTERN:
                 case VARIABLE:
-                    VarSymbol v = frame.hasTag(Tag.BINDINGPATTERN) ? ((JCBindingPattern) frame).symbol : ((JCVariableDecl) frame).sym;
+                    VarSymbol v = ((JCVariableDecl) frame).sym;
                     if (v.getKind() != ElementKind.FIELD) {
                         appendTypeAnnotationsToOwner(v, v.getRawTypeAttributes());
                     }

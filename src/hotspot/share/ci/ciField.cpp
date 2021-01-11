@@ -26,12 +26,15 @@
 #include "ci/ciField.hpp"
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciUtilities.inline.hpp"
+#include "classfile/javaClasses.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "interpreter/linkResolver.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/fieldDescriptor.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/reflectionUtils.hpp"
 
 // ciField
 //
@@ -221,6 +224,7 @@ static bool trust_final_non_static_fields(ciInstanceKlass* holder) {
   // Even if general trusting is disabled, trust system-built closures in these packages.
   if (holder->is_in_package("java/lang/invoke") || holder->is_in_package("sun/invoke") ||
       holder->is_in_package("jdk/internal/foreign") || holder->is_in_package("jdk/incubator/foreign") ||
+      holder->is_in_package("jdk/internal/vm/vector") || holder->is_in_package("jdk/incubator/vector") ||
       holder->is_in_package("java/lang"))
     return true;
   // Trust hidden classes and VM unsafe anonymous classes. They are created via
@@ -230,6 +234,9 @@ static bool trust_final_non_static_fields(ciInstanceKlass* holder) {
     return true;
   // Trust final fields in all boxed classes
   if (holder->is_box_klass())
+    return true;
+  // Trust final fields in records
+  if (holder->is_record())
     return true;
   // Trust final fields in String
   if (holder->name() == ciSymbol::java_lang_String())
@@ -265,9 +272,9 @@ void ciField::initialize_from(fieldDescriptor* fd) {
       assert(SystemDictionary::System_klass() != NULL, "Check once per vm");
       if (k == SystemDictionary::System_klass()) {
         // Check offsets for case 2: System.in, System.out, or System.err
-        if( _offset == java_lang_System::in_offset_in_bytes()  ||
-            _offset == java_lang_System::out_offset_in_bytes() ||
-            _offset == java_lang_System::err_offset_in_bytes() ) {
+        if (_offset == java_lang_System::in_offset()  ||
+            _offset == java_lang_System::out_offset() ||
+            _offset == java_lang_System::err_offset()) {
           _is_constant = false;
           return;
         }
@@ -283,7 +290,7 @@ void ciField::initialize_from(fieldDescriptor* fd) {
     // For CallSite objects treat the target field as a compile time constant.
     assert(SystemDictionary::CallSite_klass() != NULL, "should be already initialized");
     if (k == SystemDictionary::CallSite_klass() &&
-        _offset == java_lang_invoke_CallSite::target_offset_in_bytes()) {
+        _offset == java_lang_invoke_CallSite::target_offset()) {
       assert(!has_initialized_final_update(), "CallSite is not supposed to have writes to final fields outside initializers");
       _is_constant = true;
     } else {
@@ -396,7 +403,7 @@ bool ciField::will_link(ciMethod* accessing_method,
                      _name->get_symbol(), _signature->get_symbol(),
                      methodHandle(THREAD, accessing_method->get_Method()));
   fieldDescriptor result;
-  LinkResolver::resolve_field(result, link_info, bc, false, KILL_COMPILE_ON_FATAL_(false));
+  LinkResolver::resolve_field(result, link_info, bc, false, CHECK_AND_CLEAR_(false));
 
   // update the hit-cache, unless there is a problem with memory scoping:
   if (accessing_method->holder()->is_shared() || !is_shared()) {

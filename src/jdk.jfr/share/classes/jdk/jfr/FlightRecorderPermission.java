@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package jdk.jfr;
 
+import java.security.AccessControlContext;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ import jdk.jfr.internal.PlatformRecording;
 import jdk.jfr.internal.PrivateAccess;
 import jdk.jfr.internal.Type;
 import jdk.jfr.internal.Utils;
+import jdk.jfr.internal.management.EventSettingsModifier;
 
 /**
  * Permission for controlling access to Flight Recorder.
@@ -190,6 +192,16 @@ public final class FlightRecorderPermission extends java.security.BasicPermissio
         @Override
         public PlatformRecorder getPlatformRecorder() {
             return FlightRecorder.getFlightRecorder().getInternal();
+        }
+
+        @Override
+        public AccessControlContext getContext(SettingControl settingControl) {
+            return settingControl.getContext();
+        }
+
+        @Override
+        public EventSettings newEventSettings(EventSettingsModifier esm) {
+            return new EventSettings.DelegatedEventSettings(esm);
         }
     }
 

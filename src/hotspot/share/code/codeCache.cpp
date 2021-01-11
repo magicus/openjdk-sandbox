@@ -49,6 +49,7 @@
 #include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/deoptimization.hpp"
+#include "runtime/globals_extension.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/icache.hpp"
 #include "runtime/java.hpp"
@@ -150,10 +151,10 @@ int CodeCache::_number_of_nmethods_with_dependencies = 0;
 ExceptionCache* volatile CodeCache::_exception_cache_purge_list = NULL;
 
 // Initialize arrays of CodeHeap subsets
-GrowableArray<CodeHeap*>* CodeCache::_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, true);
-GrowableArray<CodeHeap*>* CodeCache::_compiled_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, true);
-GrowableArray<CodeHeap*>* CodeCache::_nmethod_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, true);
-GrowableArray<CodeHeap*>* CodeCache::_allocable_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, true);
+GrowableArray<CodeHeap*>* CodeCache::_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, mtCode);
+GrowableArray<CodeHeap*>* CodeCache::_compiled_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, mtCode);
+GrowableArray<CodeHeap*>* CodeCache::_nmethod_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, mtCode);
+GrowableArray<CodeHeap*>* CodeCache::_allocable_heaps = new(ResourceObj::C_HEAP, mtCode) GrowableArray<CodeHeap*> (CodeBlobType::All, mtCode);
 
 void CodeCache::check_heap_sizes(size_t non_nmethod_size, size_t profiled_size, size_t non_profiled_size, size_t cache_size, bool all_set) {
   size_t total_size = non_nmethod_size + profiled_size + non_profiled_size;
@@ -484,7 +485,7 @@ CodeBlob* CodeCache::next_blob(CodeHeap* heap, CodeBlob* cb) {
  */
 CodeBlob* CodeCache::allocate(int size, int code_blob_type, int orig_code_blob_type) {
   // Possibly wakes up the sweeper thread.
-  NMethodSweeper::notify(code_blob_type);
+  NMethodSweeper::report_allocation(code_blob_type);
   assert_locked_or_safepoint(CodeCache_lock);
   assert(size > 0, "Code cache allocation request must be > 0 but is %d", size);
   if (size <= 0) {
@@ -558,10 +559,12 @@ void CodeCache::free(CodeBlob* cb) {
   CodeHeap* heap = get_code_heap(cb);
   print_trace("free", cb);
   if (cb->is_nmethod()) {
+    nmethod* ptr = (nmethod *)cb;
     heap->set_nmethod_count(heap->nmethod_count() - 1);
-    if (((nmethod *)cb)->has_dependencies()) {
+    if (ptr->has_dependencies()) {
       _number_of_nmethods_with_dependencies--;
     }
+    ptr->free_native_invokers();
   }
   if (cb->is_adapter_blob()) {
     heap->set_adapter_count(heap->adapter_count() - 1);
@@ -1043,7 +1046,7 @@ static GrowableArray<CompiledMethod*>* old_compiled_method_table = NULL;
 
 static void add_to_old_table(CompiledMethod* c) {
   if (old_compiled_method_table == NULL) {
-    old_compiled_method_table = new (ResourceObj::C_HEAP, mtCode) GrowableArray<CompiledMethod*>(100, true);
+    old_compiled_method_table = new (ResourceObj::C_HEAP, mtCode) GrowableArray<CompiledMethod*>(100, mtCode);
   }
   old_compiled_method_table->push(c);
 }
@@ -1557,6 +1560,34 @@ void CodeCache::log_state(outputStream* st) {
             blob_count(), nmethod_count(), adapter_count(),
             unallocated_capacity());
 }
+
+#ifdef LINUX
+void CodeCache::write_perf_map() {
+  MutexLocker mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+
+  // Perf expects to find the map file at /tmp/perf-<pid>.map.
+  char fname[32];
+  jio_snprintf(fname, sizeof(fname), "/tmp/perf-%d.map", os::current_process_id());
+
+  fileStream fs(fname, "w");
+  if (!fs.is_open()) {
+    log_warning(codecache)("Failed to create %s for perf map", fname);
+    return;
+  }
+
+  AllCodeBlobsIterator iter(AllCodeBlobsIterator::only_alive_and_not_unloading);
+  while (iter.next()) {
+    CodeBlob *cb = iter.method();
+    ResourceMark rm;
+    const char* method_name =
+      cb->is_compiled() ? cb->as_compiled_method()->method()->external_name()
+                        : cb->name();
+    fs.print_cr(INTPTR_FORMAT " " INTPTR_FORMAT " %s",
+                (intptr_t)cb->code_begin(), (intptr_t)cb->code_size(),
+                method_name);
+  }
+}
+#endif // LINUX
 
 //---<  BEGIN  >--- CodeHeap State Analytics.
 

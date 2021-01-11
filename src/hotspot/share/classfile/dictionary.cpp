@@ -32,7 +32,11 @@
 #include "memory/iterator.hpp"
 #include "memory/metaspaceClosure.hpp"
 #include "memory/resourceArea.hpp"
+#include "memory/universe.hpp"
+#include "oops/method.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/oopHandle.inline.hpp"
+#include "runtime/arguments.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/safepointVerifiers.hpp"
 #include "utilities/hashtable.inline.hpp"
@@ -92,23 +96,6 @@ void Dictionary::free_entry(DictionaryEntry* entry) {
 }
 
 const int _resize_load_trigger = 5;       // load factor that will trigger the resize
-const double _resize_factor    = 2.0;     // by how much we will resize using current number of entries
-const int _resize_max_size     = 40423;   // the max dictionary size allowed
-const int _primelist[] = {107, 1009, 2017, 4049, 5051, 10103, 20201, _resize_max_size};
-const int _prime_array_size = sizeof(_primelist)/sizeof(int);
-
-// Calculate next "good" dictionary size based on requested count
-static int calculate_dictionary_size(int requested) {
-  int newsize = _primelist[0];
-  int index = 0;
-  for (newsize = _primelist[index]; index < (_prime_array_size - 1);
-       newsize = _primelist[++index]) {
-    if (requested <= newsize) {
-      break;
-    }
-  }
-  return newsize;
-}
 
 bool Dictionary::does_any_dictionary_needs_resizing() {
   return Dictionary::_some_dictionary_needs_resizing;
@@ -124,15 +111,14 @@ void Dictionary::check_if_needs_resize() {
 }
 
 bool Dictionary::resize_if_needed() {
+  assert(SafepointSynchronize::is_at_safepoint(), "must be at safepoint");
   int desired_size = 0;
   if (_needs_resizing == true) {
-    desired_size = calculate_dictionary_size((int)(_resize_factor*number_of_entries()));
-    if (desired_size >= _resize_max_size) {
-      desired_size = _resize_max_size;
-      // We have reached the limit, turn resizing off
-      _resizable = false;
-    }
-    if ((desired_size != 0) && (desired_size != table_size())) {
+    desired_size = calculate_resize(false);
+    assert(desired_size != 0, "bug in calculate_resize");
+    if (desired_size == table_size()) {
+      _resizable = false; // hit max
+    } else {
       if (!resize(desired_size)) {
         // Something went wrong, turn resizing off
         _resizable = false;
@@ -400,6 +386,37 @@ void Dictionary::clean_cached_protection_domains() {
   }
 }
 
+oop SymbolPropertyEntry::method_type() const {
+  return _method_type.resolve();
+}
+
+void SymbolPropertyEntry::set_method_type(oop p) {
+  _method_type = OopHandle(Universe::vm_global(), p);
+}
+
+void SymbolPropertyEntry::free_entry() {
+  // decrement Symbol refcount here because hashtable doesn't.
+  literal()->decrement_refcount();
+  // Free OopHandle
+  _method_type.release(Universe::vm_global());
+}
+
+void SymbolPropertyEntry::print_entry(outputStream* st) const {
+  symbol()->print_value_on(st);
+  st->print("/mode=" INTX_FORMAT, symbol_mode());
+  st->print(" -> ");
+  bool printed = false;
+  if (method() != NULL) {
+    method()->print_value_on(st);
+    printed = true;
+  }
+  if (method_type() != NULL) {
+    if (printed)  st->print(" and ");
+    st->print(INTPTR_FORMAT, p2i((void *)method_type()));
+    printed = true;
+  }
+  st->print_cr(printed ? "" : "(empty)");
+}
 
 SymbolPropertyTable::SymbolPropertyTable(int table_size)
   : Hashtable<Symbol*, mtSymbol>(table_size, sizeof(SymbolPropertyEntry))
@@ -436,16 +453,6 @@ SymbolPropertyEntry* SymbolPropertyTable::add_entry(int index, unsigned int hash
   return p;
 }
 
-void SymbolPropertyTable::oops_do(OopClosure* f) {
-  for (int index = 0; index < table_size(); index++) {
-    for (SymbolPropertyEntry* p = bucket(index); p != NULL; p = p->next()) {
-      if (p->method_type() != NULL) {
-        f->do_oop(p->method_type_addr());
-      }
-    }
-  }
-}
-
 void SymbolPropertyTable::methods_do(void f(Method*)) {
   for (int index = 0; index < table_size(); index++) {
     for (SymbolPropertyEntry* p = bucket(index); p != NULL; p = p->next()) {
@@ -455,6 +462,11 @@ void SymbolPropertyTable::methods_do(void f(Method*)) {
       }
     }
   }
+}
+
+void SymbolPropertyTable::free_entry(SymbolPropertyEntry* entry) {
+  entry->free_entry();
+  Hashtable<Symbol*, mtSymbol>::free_entry(entry);
 }
 
 void DictionaryEntry::verify_protection_domain_set() {

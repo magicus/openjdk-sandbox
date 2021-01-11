@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016, 2019, SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 #include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
+#include "classfile/javaClasses.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/abstractInterpreter.hpp"
 #include "interpreter/bytecodeHistogram.hpp"
@@ -34,6 +35,7 @@
 #include "interpreter/templateInterpreterGenerator.hpp"
 #include "interpreter/templateTable.hpp"
 #include "oops/arrayOop.hpp"
+#include "oops/methodData.hpp"
 #include "oops/oop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "prims/jvmtiThreadState.hpp"
@@ -88,8 +90,8 @@ address TemplateInterpreterGenerator::generate_slow_signature_handler() {
   //
   // On entry:
   //   Z_ARG1  - intptr_t*       Address of java argument list in memory.
-  //   Z_state - cppInterpreter* Address of interpreter state for
-  //                               this method
+  //   Z_state - zeroInterpreter* Address of interpreter state for
+  //                              this method
   //   Z_method
   //
   // On exit (just before return instruction):
@@ -502,8 +504,7 @@ address TemplateInterpreterGenerator::generate_Reference_get_entry(void) {
   Label     slow_path;
   address   entry = __ pc();
 
-  const int referent_offset = java_lang_ref_Reference::referent_offset;
-  guarantee(referent_offset > 0, "referent offset not initialized");
+  const int referent_offset = java_lang_ref_Reference::referent_offset();
 
   BLOCK_COMMENT("Reference_get {");
 
@@ -856,7 +857,7 @@ void TemplateInterpreterGenerator::generate_stack_overflow_check(Register frame_
 
   // Compute the beginning of the protected zone minus the requested frame size.
   __ z_sgr(tmp1, tmp2);
-  __ add2reg(tmp1, JavaThread::stack_guard_zone_size());
+  __ add2reg(tmp1, StackOverflow::stack_guard_zone_size());
 
   // Add in the size of the frame (which is the same as subtracting it from the
   // SP, which would take another register.
@@ -2067,7 +2068,7 @@ void TemplateInterpreterGenerator::bang_stack_shadow_pages(bool native_call) {
   // needs to be checked. Only true for non-native. For native, we only bang the last page.
   if (UseStackBanging) {
     const int page_size      = os::vm_page_size();
-    const int n_shadow_pages = (int)(JavaThread::stack_shadow_zone_size()/page_size);
+    const int n_shadow_pages = (int)(StackOverflow::stack_shadow_zone_size()/page_size);
     const int start_page_num = native_call ? n_shadow_pages : 1;
     for (int pages = start_page_num; pages <= n_shadow_pages; pages++) {
       __ bang_stack_with_offset(pages*page_size);

@@ -25,23 +25,31 @@
  */
 package jdk.internal.foreign;
 
+import jdk.incubator.foreign.MemoryHandles;
 import jdk.incubator.foreign.MemoryLayout;
+import jdk.incubator.foreign.MemorySegment;
 import jdk.internal.access.JavaLangInvokeAccess;
 import jdk.internal.access.SharedSecrets;
-import sun.invoke.util.Wrapper;
+import jdk.internal.access.foreign.MemorySegmentProxy;
 
 import jdk.incubator.foreign.GroupLayout;
 import jdk.incubator.foreign.SequenceLayout;
 import jdk.incubator.foreign.ValueLayout;
+import sun.invoke.util.Wrapper;
+
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.function.ToLongFunction;
 import java.util.function.UnaryOperator;
-import java.util.stream.LongStream;
 
 /**
- * This class provide support for constructing layout paths; that is, starting from a root path (see {@link #rootPath(MemoryLayout)},
+ * This class provide support for constructing layout paths; that is, starting from a root path (see {@link #rootPath(MemoryLayout, ToLongFunction)},
  * a path can be constructed by selecting layout elements using the selector methods provided by this class
  * (see {@link #sequenceElement()}, {@link #sequenceElement(long)}, {@link #sequenceElement(long, long)}, {@link #groupElement(String)}).
  * Once a path has been fully constructed, clients can ask for the offset associated with the layout element selected
@@ -50,7 +58,18 @@ import java.util.stream.LongStream;
  */
 public class LayoutPath {
 
-    private static JavaLangInvokeAccess JLI = SharedSecrets.getJavaLangInvokeAccess();
+    private static final JavaLangInvokeAccess JLI = SharedSecrets.getJavaLangInvokeAccess();
+
+    private static final MethodHandle ADD_STRIDE;
+
+    static {
+        try {
+            ADD_STRIDE = MethodHandles.lookup().findStatic(LayoutPath.class, "addStride",
+                    MethodType.methodType(long.class, MemorySegment.class, long.class, long.class, long.class));
+        } catch (Throwable ex) {
+            throw new ExceptionInInitializerError(ex);
+        }
+    }
 
     private final MemoryLayout layout;
     private final long offset;
@@ -129,23 +148,33 @@ public class LayoutPath {
     }
 
     public VarHandle dereferenceHandle(Class<?> carrier) {
-        if (!(layout instanceof ValueLayout)) {
-            throw badLayoutPath("layout path does not select a value layout");
-        }
-
-        if (!carrier.isPrimitive() || carrier == void.class || carrier == boolean.class // illegal carrier?
-                || Wrapper.forPrimitiveType(carrier).bitWidth() != layout.bitSize()) { // carrier has the right size?
-            throw new IllegalArgumentException("Invalid carrier: " + carrier + ", for layout " + layout);
-        }
-
+        Utils.checkPrimitiveCarrierCompat(carrier, layout);
         checkAlignment(this);
 
-        return JLI.memoryAddressViewVarHandle(
-                carrier,
-                layout.byteAlignment() - 1, //mask
-                ((ValueLayout) layout).order(),
-                Utils.bitsToBytesOrThrow(offset, IllegalStateException::new),
-                LongStream.of(strides).map(s -> Utils.bitsToBytesOrThrow(s, IllegalStateException::new)).toArray());
+        List<Class<?>> expectedCoordinates = new ArrayList<>();
+        Deque<Integer> perms = new ArrayDeque<>();
+        perms.addFirst(0);
+        expectedCoordinates.add(MemorySegment.class);
+
+        VarHandle handle = Utils.fixUpVarHandle(JLI.memoryAccessVarHandle(carrier, true, layout.byteAlignment() - 1,
+                ((ValueLayout)layout).order()));
+
+        for (int i = 0 ; i < strides.length ; i++) {
+            expectedCoordinates.add(long.class);
+            perms.addFirst(0);
+            perms.addLast(i + 1);
+            //add stride
+            handle = MemoryHandles.collectCoordinates(handle, 1 + i,
+                    MethodHandles.insertArguments(ADD_STRIDE, 1, Utils.bitsToBytesOrThrow(strides[strides.length - 1 - i], IllegalStateException::new))); // MS, long, MS_n, long_n, long
+        }
+        //add offset
+        handle = MemoryHandles.insertCoordinates(handle, 1 + strides.length, Utils.bitsToBytesOrThrow(offset, IllegalStateException::new));
+
+        if (strides.length > 0) {
+            // remove duplicate MS args
+            handle = MemoryHandles.permuteCoordinates(handle, expectedCoordinates, perms.stream().mapToInt(i -> i).toArray());
+        }
+        return handle;
     }
 
     public MemoryLayout layout() {
@@ -241,7 +270,7 @@ public class LayoutPath {
         return newStrides;
     }
 
-    private static long[] EMPTY_STRIDES = new long[0];
+    private static final long[] EMPTY_STRIDES = new long[0];
 
     /**
      * This class provides an immutable implementation for the {@code PathElement} interface. A path element implementation
@@ -282,5 +311,10 @@ public class LayoutPath {
         public PathKind kind() {
             return kind;
         }
+    }
+
+    private static long addStride(MemorySegment segment, long stride, long base, long index) {
+        return MemorySegmentProxy.addOffsets(base,
+                    MemorySegmentProxy.multiplyOffsets(stride, index, ((MemorySegmentProxy)segment)), (MemorySegmentProxy)segment);
     }
 }

@@ -228,23 +228,6 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_JDK_OPTIONS],
 ])
 
 ###############################################################################
-#
-# Enable or disable the elliptic curve crypto implementation
-#
-AC_DEFUN_ONCE([JDKOPT_DETECT_INTREE_EC],
-[
-  AC_MSG_CHECKING([if elliptic curve crypto implementation is present])
-
-  if test -d "${TOPDIR}/src/jdk.crypto.ec/share/native/libsunec/impl"; then
-    ENABLE_INTREE_EC=true
-    AC_MSG_RESULT([yes])
-  else
-    ENABLE_INTREE_EC=false
-    AC_MSG_RESULT([no])
-  fi
-
-  AC_SUBST(ENABLE_INTREE_EC)
-])
 
 AC_DEFUN_ONCE([JDKOPT_SETUP_DEBUG_SYMBOLS],
 [
@@ -291,7 +274,7 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_DEBUG_SYMBOLS],
     ZIP_EXTERNAL_DEBUG_SYMBOLS=false
   elif test "x$with_native_debug_symbols" = xexternal; then
 
-    if test "x$OPENJDK_TARGET_OS" = xsolaris || test "x$OPENJDK_TARGET_OS" = xlinux; then
+    if test "x$OPENJDK_TARGET_OS" = xlinux; then
       if test "x$OBJCOPY" = x; then
         # enabling of enable-debug-symbols and can't find objcopy
         # this is an error
@@ -304,7 +287,7 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_DEBUG_SYMBOLS],
     ZIP_EXTERNAL_DEBUG_SYMBOLS=false
   elif test "x$with_native_debug_symbols" = xzipped; then
 
-    if test "x$OPENJDK_TARGET_OS" = xsolaris || test "x$OPENJDK_TARGET_OS" = xlinux; then
+    if test "x$OPENJDK_TARGET_OS" = xlinux; then
       if test "x$OBJCOPY" = x; then
         # enabling of enable-debug-symbols and can't find objcopy
         # this is an error
@@ -440,7 +423,10 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_ADDRESS_SANITIZER],
         fi
       ],
       IF_ENABLED: [
-        ASAN_CFLAGS="-fsanitize=address -fno-omit-frame-pointer"
+        # ASan is simply incompatible with gcc -Wstringop-truncation. See
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=85650
+        # It's harmless to be suppressed in clang as well.
+        ASAN_CFLAGS="-fsanitize=address -Wno-stringop-truncation -fno-omit-frame-pointer"
         ASAN_LDFLAGS="-fsanitize=address"
         JVM_CFLAGS="$JVM_CFLAGS $ASAN_CFLAGS"
         JVM_LDFLAGS="$JVM_LDFLAGS $ASAN_LDFLAGS"

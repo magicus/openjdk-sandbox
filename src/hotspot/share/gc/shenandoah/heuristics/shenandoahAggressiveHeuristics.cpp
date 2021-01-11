@@ -56,15 +56,9 @@ void ShenandoahAggressiveHeuristics::choose_collection_set_from_regiondata(Shena
   }
 }
 
-bool ShenandoahAggressiveHeuristics::should_start_gc() const {
+bool ShenandoahAggressiveHeuristics::should_start_gc() {
   log_info(gc)("Trigger: Start next cycle immediately");
   return true;
-}
-
-bool ShenandoahAggressiveHeuristics::should_process_references() {
-  if (!can_process_references()) return false;
-  // Randomly process refs with 50% chance.
-  return (os::random() & 1) == 1;
 }
 
 bool ShenandoahAggressiveHeuristics::should_unload_classes() {
@@ -72,16 +66,4 @@ bool ShenandoahAggressiveHeuristics::should_unload_classes() {
   if (has_metaspace_oom()) return true;
   // Randomly unload classes with 50% chance.
   return (os::random() & 1) == 1;
-}
-
-const char* ShenandoahAggressiveHeuristics::name() {
-  return "aggressive";
-}
-
-bool ShenandoahAggressiveHeuristics::is_diagnostic() {
-  return true;
-}
-
-bool ShenandoahAggressiveHeuristics::is_experimental() {
-  return false;
 }

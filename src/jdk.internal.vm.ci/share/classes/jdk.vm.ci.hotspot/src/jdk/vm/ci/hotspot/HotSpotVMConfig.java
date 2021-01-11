@@ -25,6 +25,7 @@ package jdk.vm.ci.hotspot;
 import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntime.runtime;
 import static jdk.vm.ci.hotspot.UnsafeAccess.UNSAFE;
 
+import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.services.Services;
 import jdk.internal.misc.Unsafe;
 
@@ -46,6 +47,9 @@ class HotSpotVMConfig extends HotSpotVMConfigAccess {
 
     HotSpotVMConfig(HotSpotVMConfigStore store) {
         super(store);
+
+        int speculationLengthBits = getConstant("JVMCINMethodData::SPECULATION_LENGTH_BITS", Integer.class);
+        JVMCIError.guarantee(HotSpotSpeculationEncoding.LENGTH_BITS == speculationLengthBits, "%d != %d", HotSpotSpeculationEncoding.LENGTH_BITS, speculationLengthBits);
     }
 
     /**
@@ -58,8 +62,6 @@ class HotSpotVMConfig extends HotSpotVMConfigAccess {
             case "x86_64":
                 return "amd64";
 
-            case "sparcv9":
-                return "sparc";
             default:
                 return arch;
         }
@@ -138,6 +140,9 @@ class HotSpotVMConfig extends HotSpotVMConfigAccess {
     final int jvmAccVarargs = getConstant("JVM_ACC_VARARGS", Integer.class);
     final int jvmAccEnum = getConstant("JVM_ACC_ENUM", Integer.class);
     final int jvmAccInterface = getConstant("JVM_ACC_INTERFACE", Integer.class);
+
+    final int jvmMiscFlagsHasDefaultMethods = getConstant("InstanceKlass::_misc_has_nonstatic_concrete_methods", Integer.class);
+    final int jvmMiscFlagsDeclaresDefaultMethods = getConstant("InstanceKlass::_misc_declares_nonstatic_concrete_methods", Integer.class);
 
     // This is only valid on AMD64.
     final int runtimeCallStackSize = getConstant("frame::arg_reg_save_area_bytes", Integer.class, osArch.equals("amd64") ? null : 0);
@@ -258,7 +263,7 @@ class HotSpotVMConfig extends HotSpotVMConfigAccess {
 
     final int heapWordSize = getConstant("HeapWordSize", Integer.class);
 
-    final long vmSymbolsSymbols = getFieldAddress("vmSymbols::_symbols[0]", "Symbol*");
+    final long symbolVmSymbols = getFieldAddress("Symbol::_vm_symbols[0]", "Symbol*");
     final int vmSymbolsFirstSID = getConstant("vmSymbols::FIRST_SID", Integer.class);
     final int vmSymbolsSIDLimit = getConstant("vmSymbols::SID_LIMIT", Integer.class);
 
@@ -276,7 +281,7 @@ class HotSpotVMConfig extends HotSpotVMConfigAccess {
         HotSpotJVMCIRuntime runtime = runtime();
         assert vmSymbolsFirstSID <= index && index < vmSymbolsSIDLimit : "index " + index + " is out of bounds";
         int offset = index * Unsafe.ADDRESS_SIZE;
-        return runtime.getCompilerToVM().getSymbol(UNSAFE.getAddress(vmSymbolsSymbols + offset));
+        return runtime.getCompilerToVM().getSymbol(UNSAFE.getAddress(symbolVmSymbols + offset));
     }
 
     final int universeBaseVtableSize = getFieldValue("CompilerToVM::Data::Universe_base_vtable_size", Integer.class, "int");

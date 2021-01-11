@@ -25,41 +25,34 @@
 package java.lang;
 
 /**
- * {@preview Associated with records, a preview feature of the Java language.
- *
- *           This class is associated with <i>records</i>, a preview
- *           feature of the Java language. Programs can only use this
- *           class when preview features are enabled. Preview features
- *           may be removed in a future release, or upgraded to permanent
- *           features of the Java language.}
- *
  * This is the common base class of all Java language record classes.
  *
  * <p>More information about records, including descriptions of the
  * implicitly declared methods synthesized by the compiler, can be
  * found in section 8.10 of
- * <cite>The Java&trade; Language Specification</cite>.
+ * <cite>The Java Language Specification</cite>.
  *
  * <p>A <em>record class</em> is a shallowly immutable, transparent carrier for
- * a fixed set of values, called the <em>record components</em>.  The Java&trade;
+ * a fixed set of values, called the <em>record components</em>.  The Java
  * language provides concise syntax for declaring record classes, whereby the
  * record components are declared in the record header.  The list of record
  * components declared in the record header form the <em>record descriptor</em>.
  *
- * <p>A record class has the following mandated members: a public <em>canonical
- * constructor</em>, whose descriptor is the same as the record descriptor;
+ * <p>A record class has the following mandated members: a <em>canonical
+ * constructor</em>, which must provide at least as much access as the record
+ * class and whose descriptor is the same as the record descriptor;
  * a private final field corresponding to each component, whose name and
  * type are the same as that of the component; a public accessor method
  * corresponding to each component, whose name and return type are the same as
  * that of the component.  If not explicitly declared in the body of the record,
  * implicit implementations for these members are provided.
  *
- * <p>The implicit declaration of the canonical constructor initializes the
- * component fields from the corresponding constructor arguments.  The implicit
- * declaration of the accessor methods returns the value of the corresponding
- * component field.  The implicit declaration of the {@link Object#equals(Object)},
- * {@link Object#hashCode()}, and {@link Object#toString()} methods are derived
- * from all of the component fields.
+ * <p>The implicit declaration of the canonical constructor has the same accessibility
+ * as the record class and initializes the component fields from the corresponding
+ * constructor arguments.  The implicit declaration of the accessor methods returns
+ * the value of the corresponding component field.  The implicit declaration of the
+ * {@link Object#equals(Object)}, {@link Object#hashCode()}, and {@link Object#toString()}
+ * methods are derived from all of the component fields.
  *
  * <p>The primary reasons to provide an explicit declaration for the
  * canonical constructor or accessor methods are to validate constructor
@@ -85,10 +78,8 @@ package java.lang;
  * <a href="{@docRoot}/java.base/java/io/ObjectInputStream.html#record-serialization">record serialization</a>.
  *
  * @jls 8.10 Record Types
- * @since 14
+ * @since 16
  */
-@jdk.internal.PreviewFeature(feature=jdk.internal.PreviewFeature.Feature.RECORDS,
-                             essentialAPI=true)
 public abstract class Record {
     /**
      * Constructor for record classes to call.

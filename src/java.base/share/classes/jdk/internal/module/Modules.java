@@ -56,7 +56,7 @@ import jdk.internal.access.SharedSecrets;
  * code that need to link to supporting classes.
  *
  * The parameters that are package names in this API are the fully-qualified
- * names of the packages as defined in section 6.5.3 of <cite>The Java&trade;
+ * names of the packages as defined in section 6.5.3 of <cite>The Java
  * Language Specification </cite>, for example, {@code "java.lang"}.
  */
 
@@ -103,6 +103,13 @@ public class Modules {
      */
     public static void addExports(Module m1, String pn, Module m2) {
         JLA.addExports(m1, pn, m2);
+    }
+
+    /**
+     * Updates module m to export a package unconditionally.
+     */
+    public static void addExports(Module m, String pn) {
+        JLA.addExports(m, pn);
     }
 
     /**

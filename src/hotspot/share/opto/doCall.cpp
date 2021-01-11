@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@
 #include "opto/rootnode.hpp"
 #include "opto/runtime.hpp"
 #include "opto/subnode.hpp"
+#include "prims/methodHandles.hpp"
 #include "prims/nativeLookup.hpp"
 #include "runtime/sharedRuntime.hpp"
 
@@ -65,7 +66,7 @@ void trace_type_profile(Compile* C, ciMethod *method, int depth, int bci, ciMeth
 CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool call_does_dispatch,
                                        JVMState* jvms, bool allow_inline,
                                        float prof_factor, ciKlass* speculative_receiver_type,
-                                       bool allow_intrinsics, bool delayed_forbidden) {
+                                       bool allow_intrinsics) {
   ciMethod*       caller   = jvms->method();
   int             bci      = jvms->bci();
   Bytecodes::Code bytecode = caller->java_code_at_bci(bci);
@@ -134,6 +135,8 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
       if (cg->does_virtual_dispatch()) {
         cg_intrinsic = cg;
         cg = NULL;
+      } else if (should_delay_vector_inlining(callee, jvms)) {
+        return CallGenerator::for_late_inline(callee, cg);
       } else {
         return cg;
       }
@@ -145,8 +148,7 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
   // MethodHandle.invoke* are native methods which obviously don't
   // have bytecodes and so normal inlining fails.
   if (callee->is_method_handle_intrinsic()) {
-    CallGenerator* cg = CallGenerator::for_method_handle_call(jvms, caller, callee, delayed_forbidden);
-    assert(cg == NULL || !delayed_forbidden || !cg->is_late_inline() || cg->is_mh_late_inline(), "unexpected CallGenerator");
+    CallGenerator* cg = CallGenerator::for_method_handle_call(jvms, caller, callee);
     return cg;
   }
 
@@ -182,12 +184,12 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
           // opportunity to perform some high level optimizations
           // first.
           if (should_delay_string_inlining(callee, jvms)) {
-            assert(!delayed_forbidden, "strange");
             return CallGenerator::for_string_late_inline(callee, cg);
           } else if (should_delay_boxing_inlining(callee, jvms)) {
-            assert(!delayed_forbidden, "strange");
             return CallGenerator::for_boxing_late_inline(callee, cg);
-          } else if ((should_delay || AlwaysIncrementalInline) && !delayed_forbidden) {
+          } else if (should_delay_vector_reboxing_inlining(callee, jvms)) {
+            return CallGenerator::for_vector_reboxing_late_inline(callee, cg);
+          } else if ((should_delay || AlwaysIncrementalInline)) {
             return CallGenerator::for_late_inline(callee, cg);
           }
         }
@@ -353,7 +355,9 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
   // Use a more generic tactic, like a simple call.
   if (call_does_dispatch) {
     const char* msg = "virtual call";
-    if (PrintInlining) print_inlining(callee, jvms->depth() - 1, jvms->bci(), msg);
+    if (C->print_inlining()) {
+      print_inlining(callee, jvms->depth() - 1, jvms->bci(), msg);
+    }
     C->log_inline_failure(msg);
     return CallGenerator::for_virtual_call(callee, vtable_index);
   } else {
@@ -422,6 +426,14 @@ bool Compile::should_delay_boxing_inlining(ciMethod* call_method, JVMState* jvms
     return aggressive_unboxing();
   }
   return false;
+}
+
+bool Compile::should_delay_vector_inlining(ciMethod* call_method, JVMState* jvms) {
+  return EnableVectorSupport && call_method->is_vector_method();
+}
+
+bool Compile::should_delay_vector_reboxing_inlining(ciMethod* call_method, JVMState* jvms) {
+  return EnableVectorSupport && (call_method->intrinsic_id() == vmIntrinsics::_VectorRebox);
 }
 
 // uncommon-trap call-sites where callee is unloaded, uninitialized or will not link
@@ -633,10 +645,6 @@ void Parse::do_call() {
     receiver = record_profiled_receiver_for_speculation(receiver);
   }
 
-  // Bump method data counters (We profile *before* the call is made
-  // because exceptions don't return to the call site.)
-  profile_call(receiver);
-
   JVMState* new_jvms = cg->generate(jvms);
   if (new_jvms == NULL) {
     // When inlining attempt fails (e.g., too many arguments),
@@ -660,7 +668,6 @@ void Parse::do_call() {
 
   if (cg->is_inline()) {
     // Accumulate has_loops estimate
-    C->set_has_loops(C->has_loops() || cg->method()->has_loops());
     C->env()->notice_inlined_method(cg->method());
   }
 

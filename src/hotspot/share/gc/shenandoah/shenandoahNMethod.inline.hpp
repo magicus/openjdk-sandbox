@@ -78,10 +78,6 @@ void ShenandoahNMethod::heal_nmethod_metadata(ShenandoahNMethod* nmethod_data) {
 }
 
 void ShenandoahNMethod::disarm_nmethod(nmethod* nm) {
-  if (!ShenandoahConcurrentRoots::can_do_concurrent_class_unloading()) {
-    return;
-  }
-
   BarrierSetNMethod* const bs = BarrierSet::barrier_set()->barrier_set_nmethod();
   assert(bs != NULL, "Sanity");
   if (bs->is_armed(nm)) {
@@ -122,37 +118,6 @@ void ShenandoahNMethodList::set(int index, ShenandoahNMethod* snm) {
 
 ShenandoahNMethod** ShenandoahNMethodList::list() const {
   return _list;
-}
-
-template<bool CSET_FILTER>
-void ShenandoahNMethodTableSnapshot::parallel_blobs_do(CodeBlobClosure *f) {
-  size_t stride = 256; // educated guess
-
-  ShenandoahNMethod** const list = _list->list();
-
-  size_t max = (size_t)_limit;
-  while (_claimed < max) {
-    size_t cur = Atomic::fetch_and_add(&_claimed, stride);
-    size_t start = cur;
-    size_t end = MIN2(cur + stride, max);
-    if (start >= max) break;
-
-    for (size_t idx = start; idx < end; idx++) {
-      ShenandoahNMethod* nmr = list[idx];
-      assert(nmr != NULL, "Sanity");
-      if (nmr->is_unregistered()) {
-        continue;
-      }
-
-      nmr->assert_alive_and_correct();
-
-      if (CSET_FILTER && !nmr->has_cset_oops(_heap)) {
-        continue;
-      }
-
-      f->do_code_blob(nmr->nm());
-    }
-  }
 }
 
 #endif // SHARE_GC_SHENANDOAH_SHENANDOAHNMETHOD_INLINE_HPP

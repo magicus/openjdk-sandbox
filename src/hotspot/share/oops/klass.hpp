@@ -176,13 +176,11 @@ private:
   // Flags of the current shared class.
   u2     _shared_class_flags;
   enum {
-    _has_raw_archived_mirror = 1
+    _archived_lambda_proxy_is_available = 2
   };
 #endif
 
-  // The _archived_mirror is set at CDS dump time pointing to the cached mirror
-  // in the open archive heap region when archiving java object is supported.
-  CDS_JAVA_HEAP_ONLY(narrowOop _archived_mirror;)
+  CDS_JAVA_HEAP_ONLY(int _archived_mirror_index;)
 
 protected:
 
@@ -195,12 +193,12 @@ protected:
  public:
   int id() { return _id; }
 
-  enum DefaultsLookupMode { find_defaults, skip_defaults };
-  enum OverpassLookupMode { find_overpass, skip_overpass };
-  enum StaticLookupMode   { find_static,   skip_static };
-  enum PrivateLookupMode  { find_private,  skip_private };
+  enum class DefaultsLookupMode { find, skip };
+  enum class OverpassLookupMode { find, skip };
+  enum class StaticLookupMode   { find, skip };
+  enum class PrivateLookupMode  { find, skip };
 
-  bool is_klass() const volatile { return true; }
+  virtual bool is_klass() const { return true; }
 
   // super() cannot be InstanceKlass* -- Java arrays are covariant, and _super is used
   // to implement that. NB: the _super of "[Ljava/lang/Integer;" is "[Ljava/lang/Number;"
@@ -261,17 +259,15 @@ protected:
   oop java_mirror_no_keepalive() const;
   void set_java_mirror(Handle m);
 
-  oop archived_java_mirror_raw() NOT_CDS_JAVA_HEAP_RETURN_(NULL); // no GC barrier
-  narrowOop archived_java_mirror_raw_narrow() NOT_CDS_JAVA_HEAP_RETURN_(0); // no GC barrier
-  void set_archived_java_mirror_raw(oop m) NOT_CDS_JAVA_HEAP_RETURN; // no GC barrier
+  oop archived_java_mirror() NOT_CDS_JAVA_HEAP_RETURN_(NULL);
+  void set_archived_java_mirror(oop m) NOT_CDS_JAVA_HEAP_RETURN;
 
   // Temporary mirror switch used by RedefineClasses
-  // Both mirrors are on the ClassLoaderData::_handles list already so no
-  // barriers are needed.
-  void set_java_mirror_handle(OopHandle mirror) { _java_mirror = mirror; }
-  OopHandle java_mirror_handle() const          {
-    return _java_mirror;
-  }
+  void replace_java_mirror(oop mirror);
+
+  // Set java mirror OopHandle to NULL for CDS
+  // This leaves the OopHandle in the CLD, but that's ok, you can't release them.
+  void clear_java_mirror_handle() { _java_mirror = OopHandle(); }
 
   // modifier flags
   jint modifier_flags() const          { return _modifier_flags; }
@@ -293,6 +289,7 @@ protected:
 
   void set_next_link(Klass* k) { _next_link = k; }
   Klass* next_link() const { return _next_link; }   // The next klass defined by the class loader.
+  Klass** next_link_addr() { return &_next_link; }
 
   // class loader data
   ClassLoaderData* class_loader_data() const               { return _class_loader_data; }
@@ -306,14 +303,21 @@ protected:
     _shared_class_path_index = index;
   };
 
-  void set_has_raw_archived_mirror() {
-    CDS_ONLY(_shared_class_flags |= _has_raw_archived_mirror;)
+  bool has_archived_mirror_index() const {
+    CDS_JAVA_HEAP_ONLY(return _archived_mirror_index >= 0;)
+    NOT_CDS_JAVA_HEAP(return false);
   }
-  void clear_has_raw_archived_mirror() {
-    CDS_ONLY(_shared_class_flags &= ~_has_raw_archived_mirror;)
+
+  void clear_archived_mirror_index() NOT_CDS_JAVA_HEAP_RETURN;
+
+  void set_lambda_proxy_is_available() {
+    CDS_ONLY(_shared_class_flags |= _archived_lambda_proxy_is_available;)
   }
-  bool has_raw_archived_mirror() const {
-    CDS_ONLY(return (_shared_class_flags & _has_raw_archived_mirror) != 0;)
+  void clear_lambda_proxy_is_available() {
+    CDS_ONLY(_shared_class_flags &= ~_archived_lambda_proxy_is_available;)
+  }
+  bool lambda_proxy_is_available() const {
+    CDS_ONLY(return (_shared_class_flags & _archived_lambda_proxy_is_available) != 0;)
     NOT_CDS(return false;)
   }
 
@@ -470,10 +474,10 @@ protected:
   virtual Klass* find_field(Symbol* name, Symbol* signature, fieldDescriptor* fd) const;
   virtual Method* uncached_lookup_method(const Symbol* name, const Symbol* signature,
                                          OverpassLookupMode overpass_mode,
-                                         PrivateLookupMode = find_private) const;
+                                         PrivateLookupMode = PrivateLookupMode::find) const;
  public:
   Method* lookup_method(const Symbol* name, const Symbol* signature) const {
-    return uncached_lookup_method(name, signature, find_overpass);
+    return uncached_lookup_method(name, signature, OverpassLookupMode::find);
   }
 
   // array class with specific rank
@@ -522,7 +526,7 @@ protected:
 
   bool is_unshareable_info_restored() const {
     assert(is_shared(), "use this for shared classes only");
-    if (has_raw_archived_mirror()) {
+    if (has_archived_mirror_index()) {
       // _java_mirror is not a valid OopHandle but rather an encoded reference in the shared heap
       return false;
     } else if (_java_mirror.ptr_raw() == NULL) {
@@ -620,6 +624,8 @@ protected:
   void set_is_hidden()                  { _access_flags.set_is_hidden_class(); }
   bool is_non_strong_hidden() const     { return access_flags().is_hidden_class() &&
                                           class_loader_data()->has_class_mirror_holder(); }
+  bool is_box() const                   { return access_flags().is_box_class(); }
+  void set_is_box()                     { _access_flags.set_is_box_class(); }
 
   bool is_cloneable() const;
   void set_is_cloneable();
@@ -629,6 +635,7 @@ protected:
   // prototype markWord. If biased locking is enabled it may further be
   // biasable and have an epoch.
   markWord prototype_header() const      { return _prototype_header; }
+
   // NOTE: once instances of this klass are floating around in the
   // system, this header must only be updated at a safepoint.
   // NOTE 2: currently we only ever set the prototype header to the

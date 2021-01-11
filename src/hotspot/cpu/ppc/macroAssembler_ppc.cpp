@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2019, SAP SE. All rights reserved.
+ * Copyright (c) 2012, 2019 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -220,8 +220,9 @@ address MacroAssembler::patch_set_narrow_oop(address a, address bound, narrowOop
   }
   assert(inst1_found, "inst is not lis");
 
-  int xc = (data >> 16) & 0xffff;
-  int xd = (data >>  0) & 0xffff;
+  uint32_t data_value = CompressedOops::narrow_oop_value(data);
+  int xc = (data_value >> 16) & 0xffff;
+  int xd = (data_value >>  0) & 0xffff;
 
   set_imm((int *)inst1_addr, (short)(xc)); // see enc_load_con_narrow_hi/_lo
   set_imm((int *)inst2_addr,        (xd)); // unsigned int
@@ -254,7 +255,7 @@ narrowOop MacroAssembler::get_narrow_oop(address a, address bound) {
   uint xl = ((unsigned int) (get_imm(inst2_addr, 0) & 0xffff));
   uint xh = (((get_imm(inst1_addr, 0)) & 0xffff) << 16);
 
-  return (int) (xl | xh);
+  return CompressedOops::narrow_oop_cast(xl | xh);
 }
 #endif // _LP64
 
@@ -379,25 +380,6 @@ AddressLiteral MacroAssembler::constant_oop_address(jobject obj) {
   assert(oop_recorder() != NULL, "this assembler needs an OopRecorder");
   int oop_index = oop_recorder()->find_index(obj);
   return AddressLiteral(address(obj), oop_Relocation::spec(oop_index));
-}
-
-RegisterOrConstant MacroAssembler::delayed_value_impl(intptr_t* delayed_value_addr,
-                                                      Register tmp, int offset) {
-  intptr_t value = *delayed_value_addr;
-  if (value != 0) {
-    return RegisterOrConstant(value + offset);
-  }
-
-  // Load indirectly to solve generation ordering problem.
-  // static address, no relocation
-  int simm16_offset = load_const_optimized(tmp, delayed_value_addr, noreg, true);
-  ld(tmp, simm16_offset, tmp); // must be aligned ((xa & 3) == 0)
-
-  if (offset != 0) {
-    addi(tmp, tmp, offset);
-  }
-
-  return RegisterOrConstant(tmp);
 }
 
 #ifndef PRODUCT
@@ -875,17 +857,17 @@ void MacroAssembler::restore_volatile_gprs(Register src, int offset) {
 
 void MacroAssembler::save_LR_CR(Register tmp) {
   mfcr(tmp);
-  std(tmp, _abi(cr), R1_SP);
+  std(tmp, _abi0(cr), R1_SP);
   mflr(tmp);
-  std(tmp, _abi(lr), R1_SP);
+  std(tmp, _abi0(lr), R1_SP);
   // Tmp must contain lr on exit! (see return_addr and prolog in ppc64.ad)
 }
 
 void MacroAssembler::restore_LR_CR(Register tmp) {
   assert(tmp != R1_SP, "must be distinct");
-  ld(tmp, _abi(lr), R1_SP);
+  ld(tmp, _abi0(lr), R1_SP);
   mtlr(tmp);
-  ld(tmp, _abi(cr), R1_SP);
+  ld(tmp, _abi0(cr), R1_SP);
   mtcr(tmp);
 }
 
@@ -902,11 +884,11 @@ void MacroAssembler::resize_frame(Register offset, Register tmp) {
 #ifdef ASSERT
   assert_different_registers(offset, tmp, R1_SP);
   andi_(tmp, offset, frame::alignment_in_bytes-1);
-  asm_assert_eq("resize_frame: unaligned", 0x204);
+  asm_assert_eq("resize_frame: unaligned");
 #endif
 
   // tmp <- *(SP)
-  ld(tmp, _abi(callers_sp), R1_SP);
+  ld(tmp, _abi0(callers_sp), R1_SP);
   // addr <- SP + offset;
   // *(addr) <- tmp;
   // SP <- addr
@@ -918,7 +900,7 @@ void MacroAssembler::resize_frame(int offset, Register tmp) {
   assert_different_registers(tmp, R1_SP);
   assert((offset & (frame::alignment_in_bytes-1))==0, "resize_frame: unaligned");
   // tmp <- *(SP)
-  ld(tmp, _abi(callers_sp), R1_SP);
+  ld(tmp, _abi0(callers_sp), R1_SP);
   // addr <- SP + offset;
   // *(addr) <- tmp;
   // SP <- addr
@@ -941,7 +923,7 @@ void MacroAssembler::push_frame(Register bytes, Register tmp) {
 #ifdef ASSERT
   assert(bytes != R0, "r0 not allowed here");
   andi_(R0, bytes, frame::alignment_in_bytes-1);
-  asm_assert_eq("push_frame(Reg, Reg): unaligned", 0x203);
+  asm_assert_eq("push_frame(Reg, Reg): unaligned");
 #endif
   neg(tmp, bytes);
   stdux(R1_SP, R1_SP, tmp);
@@ -972,7 +954,7 @@ void MacroAssembler::push_frame_reg_args_nonvolatiles(unsigned int bytes,
 
 // Pop current C frame.
 void MacroAssembler::pop_frame() {
-  ld(R1_SP, _abi(callers_sp), R1_SP);
+  ld(R1_SP, _abi0(callers_sp), R1_SP);
 }
 
 #if defined(ABI_ELFv2)
@@ -2313,7 +2295,7 @@ void MacroAssembler::tlab_allocate(
     Label L;
     andi_(R0, new_top, MinObjAlignmentInBytesMask);
     beq(CCR0, L);
-    stop("updated TLAB free is not properly aligned", 0x934);
+    stop("updated TLAB free is not properly aligned");
     bind(L);
   }
 #endif // ASSERT
@@ -2792,7 +2774,7 @@ void MacroAssembler::rtm_inflated_locking(ConditionRegister flag,
     ld(mark_word, oopDesc::mark_offset_in_bytes(), obj);
 #ifdef ASSERT
     andi_(R0, mark_word, markWord::monitor_value);
-    asm_assert_ne("must be inflated", 0xa754); // Deflating only allowed at safepoint.
+    asm_assert_ne("must be inflated"); // Deflating only allowed at safepoint.
 #endif
     addi(owner_addr_Reg, mark_word, owner_offset);
   }
@@ -2836,6 +2818,12 @@ void MacroAssembler::compiler_fast_lock_object(ConditionRegister flag, Register 
   // Load markWord from object into displaced_header.
   ld(displaced_header, oopDesc::mark_offset_in_bytes(), oop);
 
+  if (DiagnoseSyncOnPrimitiveWrappers != 0) {
+    load_klass(temp, oop);
+    lwz(temp, in_bytes(Klass::access_flags_offset()), temp);
+    testbitdi(flag, R0, temp, exact_log2(JVM_ACC_IS_BOX_CLASS));
+    bne(flag, cont);
+  }
 
   if (try_bias) {
     biased_locking_enter(flag, oop, displaced_header, temp, current_header, cont);
@@ -2929,7 +2917,7 @@ void MacroAssembler::compiler_fast_lock_object(ConditionRegister flag, Register 
   // Invariant 1: _recursions should be 0.
   //assert(ObjectMonitor::recursions_size_in_bytes() == 8, "unexpected size");
   asm_assert_mem8_is_zero(ObjectMonitor::recursions_offset_in_bytes(), temp,
-                            "monitor->_recursions should be 0", -1);
+                            "monitor->_recursions should be 0");
 # endif
 
 #if INCLUDE_RTM_OPT
@@ -3037,7 +3025,7 @@ void MacroAssembler::compiler_fast_unlock_object(ConditionRegister flag, Registe
 }
 
 void MacroAssembler::safepoint_poll(Label& slow_path, Register temp_reg) {
-  ld(temp_reg, in_bytes(Thread::polling_page_offset()), R16_thread);
+  ld(temp_reg, in_bytes(Thread::polling_word_offset()), R16_thread);
   // Armed page has poll_bit set.
   andi_(temp_reg, temp_reg, SafepointMechanism::poll_bit());
   bne(CCR0, slow_path);
@@ -3058,7 +3046,7 @@ void MacroAssembler::set_last_Java_frame(Register last_Java_sp, Register last_Ja
 
   // Verify that last_Java_pc was zeroed on return to Java
   asm_assert_mem8_is_zero(in_bytes(JavaThread::last_Java_pc_offset()), R16_thread,
-                          "last_Java_pc not zeroed before leaving Java", 0x200);
+                          "last_Java_pc not zeroed before leaving Java");
 
   // When returning from calling out from Java mode the frame anchor's
   // last_Java_pc will always be set to NULL. It is set here so that
@@ -3074,7 +3062,7 @@ void MacroAssembler::set_last_Java_frame(Register last_Java_sp, Register last_Ja
 
 void MacroAssembler::reset_last_Java_frame(void) {
   asm_assert_mem8_isnot_zero(in_bytes(JavaThread::last_Java_sp_offset()),
-                             R16_thread, "SP was not set, still zero", 0x202);
+                             R16_thread, "SP was not set, still zero");
 
   BLOCK_COMMENT("reset_last_Java_frame {");
   li(R0, 0);
@@ -4327,7 +4315,7 @@ void MacroAssembler::multiply_to_len(Register x, Register xlen,
   bind(L_done);
 }   // multiply_to_len
 
-void MacroAssembler::asm_assert(bool check_equal, const char *msg, int id) {
+void MacroAssembler::asm_assert(bool check_equal, const char *msg) {
 #ifdef ASSERT
   Label ok;
   if (check_equal) {
@@ -4335,13 +4323,13 @@ void MacroAssembler::asm_assert(bool check_equal, const char *msg, int id) {
   } else {
     bne(CCR0, ok);
   }
-  stop(msg, id);
+  stop(msg);
   bind(ok);
 #endif
 }
 
 void MacroAssembler::asm_assert_mems_zero(bool check_equal, int size, int mem_offset,
-                                          Register mem_base, const char* msg, int id) {
+                                          Register mem_base, const char* msg) {
 #ifdef ASSERT
   switch (size) {
     case 4:
@@ -4355,7 +4343,7 @@ void MacroAssembler::asm_assert_mems_zero(bool check_equal, int size, int mem_of
     default:
       ShouldNotReachHere();
   }
-  asm_assert(check_equal, msg, id);
+  asm_assert(check_equal, msg);
 #endif // ASSERT
 }
 
@@ -4430,32 +4418,24 @@ void MacroAssembler::verify_oop_addr(RegisterOrConstant offs, Register base, con
   restore_volatile_gprs(R1_SP, -nbytes_save); // except R0
 }
 
-const char* stop_types[] = {
-  "stop",
-  "untested",
-  "unimplemented",
-  "shouldnotreachhere"
-};
-
-static void stop_on_request(int tp, const char* msg) {
-  tty->print("PPC assembly code requires stop: (%s) %s\n", stop_types[tp%/*stop_end*/4], msg);
-  guarantee(false, "PPC assembly code requires stop: %s", msg);
-}
-
 // Call a C-function that prints output.
-void MacroAssembler::stop(int type, const char* msg, int id) {
+void MacroAssembler::stop(int type, const char* msg) {
+  bool msg_present = (msg != NULL);
+
 #ifndef PRODUCT
-  block_comment(err_msg("stop: %s %s {", stop_types[type%stop_end], msg));
+  block_comment(err_msg("stop(type %d): %s {", type, msg_present ? msg : "null"));
 #else
   block_comment("stop {");
 #endif
 
-  // setup arguments
-  load_const_optimized(R3_ARG1, type);
-  load_const_optimized(R4_ARG2, (void *)msg, /*tmp=*/R0);
-  call_VM_leaf(CAST_FROM_FN_PTR(address, stop_on_request), R3_ARG1, R4_ARG2);
-  illtrap();
-  emit_int32(id);
+  if (msg_present) {
+    type |= stop_msg_present;
+  }
+  tdi_unchecked(traptoUnconditional, 0/*reg 0*/, type);
+  if (msg_present) {
+    emit_int64((uintptr_t)msg);
+  }
+
   block_comment("} stop;");
 }
 

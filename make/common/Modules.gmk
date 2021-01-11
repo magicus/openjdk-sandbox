@@ -59,6 +59,7 @@ BOOT_MODULES += \
     java.security.sasl \
     java.xml \
     jdk.incubator.foreign \
+    jdk.incubator.vector \
     jdk.internal.vm.ci \
     jdk.jfr \
     jdk.management \
@@ -122,13 +123,8 @@ ifeq ($(call isTargetOs, windows), true)
   PLATFORM_MODULES += jdk.crypto.mscapi
 endif
 
-ifeq ($(call isTargetOs, solaris), true)
-  PLATFORM_MODULES += jdk.crypto.ucrypto
-endif
-
 JRE_TOOL_MODULES += \
     jdk.jdwp.agent \
-    jdk.incubator.jpackage \
     #
 
 ################################################################################
@@ -148,7 +144,8 @@ DOCS_MODULES += \
     jdk.editpad \
     jdk.hotspot.agent \
     jdk.httpserver \
-    jdk.incubator.jpackage \
+    jdk.jpackage \
+    jdk.incubator.vector \
     jdk.jartool \
     jdk.javadoc \
     jdk.jcmd \
@@ -197,21 +194,6 @@ HOTSPOT_MODULES := \
     jdk.internal.vm.compiler.management \
     #
 
-# The native dynamic libraries in these modules will also get built into static
-# libraries for consumption by downstream projects that need to statically link
-# the JDK libraries. Those static libraries are not part of the main JDK
-# distribution.
-STATIC_LIBS_MODULES := \
-    java.base \
-    jdk.crypto.ec \
-    jdk.security.auth \
-    java.prefs \
-    java.security.jgss \
-    java.smartcardio \
-    jdk.crypto.cryptoki \
-    jdk.net \
-    #
-
 ################################################################################
 # Some platforms don't have the serviceability agent
 
@@ -245,7 +227,7 @@ endif
 # jpackage is only on windows, macosx, and linux
 
 ifeq ($(call isTargetOs, windows macosx linux), false)
-  MODULES_FILTER += jdk.incubator.jpackage
+  MODULES_FILTER += jdk.jpackage
 endif
 
 ################################################################################
@@ -364,7 +346,7 @@ $(MODULE_DEPS_MAKEFILE): $(MODULE_INFOS) \
 	$(RM) $@
 	$(foreach m, $(MODULE_INFOS), \
 	    ( $(PRINTF) "DEPS_$(call GetModuleNameFromModuleInfo, $m) :=" && \
-	      $(NAWK) -v MODULE=$(call GetModuleNameFromModuleInfo, $m) '\
+	      $(AWK) -v MODULE=$(call GetModuleNameFromModuleInfo, $m) '\
 	          BEGIN      { if (MODULE != "java.base") printf(" java.base"); } \
 	          /^ *requires/ { sub(/;/, ""); \
 	                          sub(/requires /, " "); \
@@ -374,10 +356,11 @@ $(MODULE_DEPS_MAKEFILE): $(MODULE_INFOS) \
 	                          sub(/\/\*.*\*\//, ""); \
 	                          gsub(/^ +\*.*/, ""); \
 	                          gsub(/ /, ""); \
+	                          gsub(/\r/, ""); \
 	                          printf(" %s", $$0) } \
 	          END           { printf("\n") }' $m && \
 	      $(PRINTF) "TRANSITIVE_MODULES_$(call GetModuleNameFromModuleInfo, $m) :=" && \
-	      $(NAWK) -v MODULE=$(call GetModuleNameFromModuleInfo, $m) '\
+	      $(AWK) -v MODULE=$(call GetModuleNameFromModuleInfo, $m) '\
 	          BEGIN      { if (MODULE != "java.base") printf(" java.base"); } \
 	          /^ *requires  *transitive/ { \
 	                          sub(/;/, ""); \
@@ -387,6 +370,7 @@ $(MODULE_DEPS_MAKEFILE): $(MODULE_INFOS) \
 	                          sub(/\/\*.*\*\//, ""); \
 	                          gsub(/^ +\*.*/, ""); \
 	                          gsub(/ /, ""); \
+	                          gsub(/\r/, ""); \
 	                          printf(" %s", $$0) } \
 	          END           { printf("\n") }' $m \
 	    ) >> $@ $(NEWLINE))

@@ -30,6 +30,7 @@ import static java.util.stream.Collectors.toList;
 import static jdk.test.lib.process.ProcessTools.createJavaProcessBuilder;
 import static jdk.test.lib.Platform.isWindows;
 import jdk.test.lib.Utils;
+import jdk.test.lib.Platform;
 import jtreg.SkippedException;
 
 import java.io.BufferedReader;
@@ -69,7 +70,7 @@ import java.util.stream.Stream;
  * The third VM communicates the success to rename the file by printing "CLOSED
  * FD". The first VM checks that the string was printed by the third VM.
  *
- * On unix like systems "lsof" or "pfiles" is used.
+ * On unix like systems "lsof" is used.
  */
 
 public class TestInheritFD {
@@ -176,8 +177,7 @@ public class TestInheritFD {
             {"/usr/sbin/lsof", "-p"},
             {"/bin/lsof", "-p"},
             {"/sbin/lsof", "-p"},
-            {"/usr/local/bin/lsof", "-p"},
-            {"/usr/bin/pfiles", "-F"}}) // Solaris
+            {"/usr/local/bin/lsof", "-p"}})
         .filter(args -> new File(args[0]).exists())
         .findFirst();
 
@@ -194,7 +194,14 @@ public class TestInheritFD {
     }
 
     static boolean findOpenLogFile(Collection<String> fileNames) {
+        String pid = Long.toString(ProcessHandle.current().pid());
+        String[] command = lsofCommand().orElseThrow(() ->
+                new RuntimeException("lsof like command not found"));
+        String lsof = command[0];
+        boolean isBusybox = Platform.isBusybox(lsof);
         return fileNames.stream()
+            // lsof from busybox does not support "-p" option
+            .filter(fileName -> !isBusybox || fileName.contains(pid))
             .filter(fileName -> fileName.contains(LOG_SUFFIX))
             .findAny()
             .isPresent();

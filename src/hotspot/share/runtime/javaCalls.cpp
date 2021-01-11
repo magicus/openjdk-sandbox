@@ -30,10 +30,14 @@
 #include "compiler/compileBroker.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/linkResolver.hpp"
+#if INCLUDE_JVMCI
+#include "jvmci/jvmciJavaClasses.hpp"
+#endif
 #include "memory/universe.hpp"
 #include "oops/method.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "prims/jniCheck.hpp"
+#include "prims/jvmtiExport.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/javaCalls.hpp"
@@ -49,7 +53,7 @@
 // Implementation of JavaCallWrapper
 
 JavaCallWrapper::JavaCallWrapper(const methodHandle& callee_method, Handle receiver, JavaValue* result, TRAPS) {
-  JavaThread* thread = (JavaThread *)THREAD;
+  JavaThread* thread = THREAD->as_Java_thread();
   bool clear_pending_exception = true;
 
   guarantee(thread->is_Java_thread(), "crucial check - the VM thread cannot and must not escape to Java code");
@@ -85,7 +89,7 @@ JavaCallWrapper::JavaCallWrapper(const methodHandle& callee_method, Handle recei
   THREAD->allow_unhandled_oop(&_receiver);
 #endif // CHECK_UNHANDLED_OOPS
 
-  _thread       = (JavaThread *)thread;
+  _thread       = thread;
   _handles      = _thread->active_handles();    // save previous handle block & Java frame linkage
 
   // For the profiler, the last_Java_frame information in thread must always be in
@@ -105,10 +109,6 @@ JavaCallWrapper::JavaCallWrapper(const methodHandle& callee_method, Handle recei
   if(clear_pending_exception) {
     _thread->clear_pending_exception();
   }
-
-  if (_anchor.last_Java_sp() == NULL) {
-    _thread->record_base_of_stack_pointer();
-  }
 }
 
 
@@ -122,11 +122,6 @@ JavaCallWrapper::~JavaCallWrapper() {
   _thread->frame_anchor()->zap();
 
   debug_only(_thread->dec_java_call_counter());
-
-  if (_anchor.last_Java_sp() == NULL) {
-    _thread->set_base_of_stack_pointer(NULL);
-  }
-
 
   // Old thread-local info. has been restored. We are not back in the VM.
   ThreadStateTransition::transition_from_java(_thread, _thread_in_vm);
@@ -142,6 +137,14 @@ JavaCallWrapper::~JavaCallWrapper() {
   // Release handles after we are marked as being inside the VM again, since this
   // operation might block
   JNIHandleBlock::release_block(_old_handles, _thread);
+
+  if (_thread->has_pending_exception() && _thread->has_last_Java_frame()) {
+    // If we get here, the Java code threw an exception that unwound a frame.
+    // It could be that the new frame anchor has not passed through the required
+    // StackWatermark barriers. Therefore, we process any such deferred unwind
+    // requests here.
+    StackWatermarkSet::after_unwind(_thread);
+  }
 }
 
 
@@ -340,33 +343,20 @@ void JavaCalls::call(JavaValue* result, const methodHandle& method, JavaCallArgu
 
 void JavaCalls::call_helper(JavaValue* result, const methodHandle& method, JavaCallArguments* args, TRAPS) {
 
-  JavaThread* thread = (JavaThread*)THREAD;
-  assert(thread->is_Java_thread(), "must be called by a java thread");
+  JavaThread* thread = THREAD->as_Java_thread();
   assert(method.not_null(), "must have a method to call");
   assert(!SafepointSynchronize::is_at_safepoint(), "call to Java code during VM operation");
   assert(!thread->handle_area()->no_handle_mark_active(), "cannot call out to Java here");
 
-#if INCLUDE_JVMCI
-  // Gets the nmethod (if any) that should be called instead of normal target
-  nmethod* alternative_target = args->alternative_target();
-  if (alternative_target == NULL) {
-#endif
-// Verify the arguments
-
-  if (CheckJNICalls)  {
+  // Verify the arguments
+  if (JVMCI_ONLY(args->alternative_target().is_null() &&) (DEBUG_ONLY(true ||) CheckJNICalls)) {
     args->verify(method, result->get_type());
   }
-  else debug_only(args->verify(method, result->get_type()));
-#if INCLUDE_JVMCI
-  }
-#else
-
   // Ignore call if method is empty
-  if (method->is_empty_method()) {
+  if (JVMCI_ONLY(args->alternative_target().is_null() &&) method->is_empty_method()) {
     assert(result->get_type() == T_VOID, "an empty method must return a void value");
     return;
   }
-#endif
 
 #ifdef ASSERT
   { InstanceKlass* holder = method->method_holder();
@@ -397,9 +387,7 @@ void JavaCalls::call_helper(JavaValue* result, const methodHandle& method, JavaC
 
   // When we reenter Java, we need to reenable the reserved/yellow zone which
   // might already be disabled when we are in VM.
-  if (!thread->stack_guards_enabled()) {
-    thread->reguard_stack();
-  }
+  thread->stack_overflow_state()->reguard_stack_if_needed();
 
   // Check that there are shadow pages available before changing thread state
   // to Java. Calculate current_stack_pointer here to make sure
@@ -414,17 +402,6 @@ void JavaCalls::call_helper(JavaValue* result, const methodHandle& method, JavaC
     os::map_stack_shadow_pages(sp);
   }
 
-#if INCLUDE_JVMCI
-  if (alternative_target != NULL) {
-    if (alternative_target->is_alive() && !alternative_target->is_unloading()) {
-      thread->set_jvmci_alternate_call_target(alternative_target->verified_entry_point());
-      entry_point = method->adapter()->get_i2c_entry();
-    } else {
-      THROW(vmSymbols::jdk_vm_ci_code_InvalidInstalledCodeException());
-    }
-  }
-#endif
-
   // do call
   { JavaCallWrapper link(method, receiver, result, CHECK);
     { HandleMark hm(thread);  // HandleMark used by HandleMarkCleaner
@@ -433,7 +410,20 @@ void JavaCalls::call_helper(JavaValue* result, const methodHandle& method, JavaC
       // the call to call_stub, the optimizer produces wrong code.
       intptr_t* result_val_address = (intptr_t*)(result->get_value_addr());
       intptr_t* parameter_address = args->parameters();
-
+#if INCLUDE_JVMCI
+      // Gets the alternative target (if any) that should be called
+      Handle alternative_target = args->alternative_target();
+      if (!alternative_target.is_null()) {
+        // Must extract verified entry point from HotSpotNmethod after VM to Java
+        // transition in JavaCallWrapper constructor so that it is safe with
+        // respect to nmethod sweeping.
+        address verified_entry_point = (address) HotSpotJVMCI::InstalledCode::entryPoint(NULL, alternative_target());
+        if (verified_entry_point != NULL) {
+          thread->set_jvmci_alternate_call_target(verified_entry_point);
+          entry_point = method->adapter()->get_i2c_entry();
+        }
+      }
+#endif
       StubRoutines::call_stub()(
         (address)&link,
         // (intptr_t*)&(result->_value), // see NOTE above (compiler problem)

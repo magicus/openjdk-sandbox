@@ -41,17 +41,7 @@ class ShenandoahVerifierTask {
 public:
   ShenandoahVerifierTask(oop o = NULL, int idx = 0): _obj(o) { }
   ShenandoahVerifierTask(oop o, size_t idx): _obj(o) { }
-  ShenandoahVerifierTask(const ShenandoahVerifierTask& t): _obj(t._obj) { }
-
-  ShenandoahVerifierTask& operator =(const ShenandoahVerifierTask& t) {
-    _obj = t._obj;
-    return *this;
-  }
-  volatile ShenandoahVerifierTask&
-  operator =(const volatile ShenandoahVerifierTask& t) volatile {
-    (void)const_cast<oop&>(_obj = t._obj);
-    return *this;
-  }
+  // Trivially copyable.
 
   inline oop obj()  const { return _obj; }
 
@@ -75,7 +65,11 @@ public:
     _verify_marked_incomplete,
 
     // Objects should be marked in "complete" bitmap.
-    _verify_marked_complete
+    _verify_marked_complete,
+
+    // Objects should be marked in "complete" bitmap, except j.l.r.Reference referents, which
+    // may be dangling after marking but before conc-weakrefs-processing.
+    _verify_marked_complete_except_references
   } VerifyMarked;
 
   typedef enum {
@@ -202,6 +196,7 @@ public:
   void verify_roots_in_to_space_except(ShenandoahRootVerifier::RootTypes types);
 
   void verify_roots_no_forwarded();
+  void verify_roots_no_forwarded(ShenandoahRootVerifier::RootTypes types);
   void verify_roots_no_forwarded_except(ShenandoahRootVerifier::RootTypes types);
 };
 

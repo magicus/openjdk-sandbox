@@ -26,6 +26,8 @@
 #include "jvm.h"
 #include "classfile/classLoaderHierarchyDCmd.hpp"
 #include "classfile/classLoaderStats.hpp"
+#include "classfile/javaClasses.hpp"
+#include "code/codeCache.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/directivesParser.hpp"
 #include "gc/shared/gcVMOperations.hpp"
@@ -109,6 +111,9 @@ void DCmdRegistrant::register_dcmds(){
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompileQueueDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CodeListDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CodeCacheDCmd>(full_export, true, false));
+#ifdef LINUX
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<PerfMapDCmd>(full_export, true, false));
+#endif // LINUX
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<TouchedMethodsDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CodeHeapAnalyticsDCmd>(full_export, true, false));
 
@@ -275,7 +280,7 @@ void SetVMFlagDCmd::execute(DCmdSource source, TRAPS) {
   }
 
   FormatBuffer<80> err_msg("%s", "");
-  int ret = WriteableFlags::set_flag(_flag.value(), val, JVMFlag::MANAGEMENT, err_msg);
+  int ret = WriteableFlags::set_flag(_flag.value(), val, JVMFlagOrigin::MANAGEMENT, err_msg);
 
   if (ret != JVMFlag::SUCCESS) {
     output()->print_cr("%s", err_msg.buffer());
@@ -300,6 +305,7 @@ void JVMTIDataDumpDCmd::execute(DCmdSource source, TRAPS) {
 }
 
 #if INCLUDE_SERVICES
+#if INCLUDE_JVMTI
 JVMTIAgentLoadDCmd::JVMTIAgentLoadDCmd(outputStream* output, bool heap) :
                                        DCmdWithParser(output, heap),
   _libpath("library path", "Absolute path of the JVMTI agent to load.",
@@ -359,6 +365,7 @@ int JVMTIAgentLoadDCmd::num_arguments() {
     return 0;
   }
 }
+#endif // INCLUDE_JVMTI
 #endif // INCLUDE_SERVICES
 
 void PrintSystemPropertiesDCmd::execute(DCmdSource source, TRAPS) {
@@ -504,17 +511,32 @@ HeapDumpDCmd::HeapDumpDCmd(outputStream* output, bool heap) :
                            DCmdWithParser(output, heap),
   _filename("filename","Name of the dump file", "STRING",true),
   _all("-all", "Dump all objects, including unreachable objects",
-       "BOOLEAN", false, "false") {
+       "BOOLEAN", false, "false"),
+  _gzip("-gz", "If specified, the heap dump is written in gzipped format "
+               "using the given compression level. 1 (recommended) is the fastest, "
+               "9 the strongest compression.", "INT", false, "1") {
   _dcmdparser.add_dcmd_option(&_all);
   _dcmdparser.add_dcmd_argument(&_filename);
+  _dcmdparser.add_dcmd_option(&_gzip);
 }
 
 void HeapDumpDCmd::execute(DCmdSource source, TRAPS) {
+  jlong level = -1; // -1 means no compression.
+
+  if (_gzip.is_set()) {
+    level = _gzip.value();
+
+    if (level < 1 || level > 9) {
+      output()->print_cr("Compression level out of range (1-9): " JLONG_FORMAT, level);
+      return;
+    }
+  }
+
   // Request a full GC before heap dump if _all is false
   // This helps reduces the amount of unreachable objects in the dump
   // and makes it easier to browse.
   HeapDumper dumper(!_all.value() /* request GC if _all is false*/);
-  dumper.dump(_filename.value(), output());
+  dumper.dump(_filename.value(), output(), (int) level);
 }
 
 int HeapDumpDCmd::num_arguments() {
@@ -877,6 +899,12 @@ void CodeCacheDCmd::execute(DCmdSource source, TRAPS) {
   CodeCache::print_layout(output());
 }
 
+#ifdef LINUX
+void PerfMapDCmd::execute(DCmdSource source, TRAPS) {
+  CodeCache::write_perf_map();
+}
+#endif // LINUX
+
 //---<  BEGIN  >--- CodeHeap State Analytics.
 CodeHeapAnalyticsDCmd::CodeHeapAnalyticsDCmd(outputStream* output, bool heap) :
                                              DCmdWithParser(output, heap),
@@ -1057,7 +1085,7 @@ void DebugOnCmdStartDCmd::execute(DCmdSource source, TRAPS) {
   char const* transport = NULL;
   char const* addr = NULL;
   jboolean is_first_start = JNI_FALSE;
-  JavaThread* thread = (JavaThread*) THREAD;
+  JavaThread* thread = THREAD->as_Java_thread();
   jthread jt = JNIHandles::make_local(thread->threadObj());
   ThreadToNativeFromVM ttn(thread);
   const char *error = "Could not find jdwp agent.";

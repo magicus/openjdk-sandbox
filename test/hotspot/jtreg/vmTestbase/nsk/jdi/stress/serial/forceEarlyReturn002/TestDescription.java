@@ -39,7 +39,11 @@
  *
  * @library /vmTestbase
  *          /test/lib
- * @run driver jdk.test.lib.FileInstaller . .
+ * @comment some of the tests from forceEarlyReturn002.tests need WhiteBox
+ * @modules java.base/jdk.internal.misc:+open
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *
  *
  * @comment build classes required for tests from forceEarlyReturn002.tests
  * @build nsk.jdi.ThreadReference.forceEarlyReturn.forceEarlyReturn001.forceEarlyReturn001
@@ -59,16 +63,17 @@
  *        nsk.jdi.ThreadReference.forceEarlyReturn.forceEarlyReturn014.forceEarlyReturn014a
  *
  * @build nsk.share.jdi.SerialExecutionDebugger
- * @run main/othervm/native PropertyResolvingWrapper
+ * @run main/othervm/native
  *      nsk.share.jdi.SerialExecutionDebugger
  *      -verbose
  *      -arch=${os.family}-${os.simpleArch}
  *      -waittime=5
  *      -debugee.vmkind=java
  *      -transport.address=dynamic
- *      "-debugee.vmkeys=${test.vm.opts} ${test.java.opts}"
+ *      -debugee.vmkeys="-Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                       -XX:+WhiteBoxAPI ${test.vm.opts} ${test.java.opts}"
  *      -testClassPath ${test.class.path}
- *      -configFile ./forceEarlyReturn002.tests
+ *      -configFile ${test.src}/forceEarlyReturn002.tests
  *      -testWorkDir .
  */
 

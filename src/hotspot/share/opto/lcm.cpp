@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -153,7 +153,6 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
 
   // Search the successor block for a load or store who's base value is also
   // the tested value.  There may be several.
-  Node_List *out = new Node_List(Thread::current()->resource_area());
   MachNode *best = NULL;        // Best found so far
   for (DUIterator i = val->outs(); val->has_out(i); i++) {
     Node *m = val->out(i);
@@ -431,7 +430,7 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     tmp1->replace_by(tmp);
     tmp2->replace_by(tmp1);
     tmp->replace_by(tmp2);
-    tmp->destruct();
+    tmp->destruct(NULL);
   }
 
   // Remove the existing null check; use a new implicit null check instead.
@@ -450,7 +449,7 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     old_tst->set_req(i3, NULL);
     if (in->outcnt() == 0) {
       // Remove dead input node
-      in->disconnect_inputs(NULL, C);
+      in->disconnect_inputs(C);
       block->find_remove(in);
     }
   }
@@ -633,7 +632,7 @@ Node* PhaseCFG::select(
     cand_cnt++;
     if (choice < n_choice ||
         (choice == n_choice &&
-         ((StressLCM && Compile::randomized_select(cand_cnt)) ||
+         ((StressLCM && C->randomized_select(cand_cnt)) ||
           (!StressLCM &&
            (latency < n_latency ||
             (latency == n_latency &&
@@ -687,6 +686,8 @@ void PhaseCFG::adjust_register_pressure(Node* n, Block* block, intptr_t* recalc_
         case Op_StoreP:
         case Op_StoreN:
         case Op_StoreVector:
+        case Op_StoreVectorScatter:
+        case Op_StoreVectorMasked:
         case Op_StoreNKlass:
           for (uint k = 1; k < m->req(); k++) {
             Node *in = m->in(k);
@@ -862,6 +863,12 @@ uint PhaseCFG::sched_call(Block* block, uint node_cnt, Node_List& worklist, Grow
       // Calling Java code so use Java calling convention
       save_policy = _matcher._register_save_policy;
       break;
+    case Op_CallNative:
+      // We use the c reg save policy here since Panama
+      // only supports the C ABI currently.
+      // TODO compute actual save policy based on nep->abi
+      save_policy = _matcher._c_reg_save_policy;
+      break;
 
     default:
       ShouldNotReachHere();
@@ -875,7 +882,14 @@ uint PhaseCFG::sched_call(Block* block, uint node_cnt, Node_List& worklist, Grow
   // done for oops since idealreg2debugmask takes care of debug info
   // references but there no way to handle oops differently than other
   // pointers as far as the kill mask goes.
-  bool exclude_soe = op == Op_CallRuntime;
+  //
+  // Also, native callees can not save oops, so we kill the SOE registers
+  // here in case a native call has a safepoint. This doesn't work for
+  // RBP though, which seems to be special-cased elsewhere to always be
+  // treated as alive, so we instead manually save the location of RBP
+  // before doing the native call (see NativeInvokerGenerator::generate).
+  bool exclude_soe = op == Op_CallRuntime
+    || (op == Op_CallNative && mcall->guaranteed_safepoint());
 
   // If the call is a MethodHandle invoke, we need to exclude the
   // register which is used to save the SP value over MH invokes from
@@ -1231,7 +1245,7 @@ Node* PhaseCFG::catch_cleanup_find_cloned_def(Block *use_blk, Node *def, Block *
   if( j == def_blk->_num_succs ) {
     // Block at same level in dom-tree is not a successor.  It needs a
     // PhiNode, the PhiNode uses from the def and IT's uses need fixup.
-    Node_Array inputs = new Node_List(Thread::current()->resource_area());
+    Node_Array inputs = new Node_List();
     for(uint k = 1; k < use_blk->num_preds(); k++) {
       Block* block = get_block_for_node(use_blk->pred(k));
       inputs.map(k, catch_cleanup_find_cloned_def(block, def, def_blk, n_clone_idx));
@@ -1342,7 +1356,7 @@ void PhaseCFG::call_catch_cleanup(Block* block) {
     uint n_clone_idx = i2-beg+1; // Index of clone of n in each successor block
     Node *n = block->get_node(i2);        // Node that got cloned
     // Need DU safe iterator because of edge manipulation in calls.
-    Unique_Node_List *out = new Unique_Node_List(Thread::current()->resource_area());
+    Unique_Node_List* out = new Unique_Node_List();
     for (DUIterator_Fast j1max, j1 = n->fast_outs(j1max); j1 < j1max; j1++) {
       out->push(n->fast_out(j1));
     }
@@ -1370,7 +1384,7 @@ void PhaseCFG::call_catch_cleanup(Block* block) {
 
   // Remove the now-dead cloned ops
   for(uint i3 = beg; i3 < end; i3++ ) {
-    block->get_node(beg)->disconnect_inputs(NULL, C);
+    block->get_node(beg)->disconnect_inputs(C);
     block->remove_node(beg);
   }
 
@@ -1383,7 +1397,7 @@ void PhaseCFG::call_catch_cleanup(Block* block) {
       Node *n = sb->get_node(j);
       if (n->outcnt() == 0 &&
           (!n->is_Proj() || n->as_Proj()->in(0)->outcnt() == 1) ){
-        n->disconnect_inputs(NULL, C);
+        n->disconnect_inputs(C);
         sb->remove_node(j);
         new_cnt--;
       }

@@ -61,7 +61,7 @@ public class DocPaths {
     /** The name of the file for constant values. */
     public static final DocPath CONSTANT_VALUES = DocPath.create("constant-values.html");
 
-    /** The name of the fie for deprecated elements. */
+    /** The name of the file for deprecated elements. */
     public static final DocPath DEPRECATED_LIST = DocPath.create("deprecated-list.html");
 
     /** The name of the subdirectory for user-provided additional documentation files. */
@@ -97,17 +97,20 @@ public class DocPaths {
     /** The name of the default javascript file. */
     public static final DocPath JAVASCRIPT = DocPath.create("script.js");
 
+    /** The name of the stylesheet file overriding jQuery UI stylesheet. */
+    public static final DocPath JQUERY_OVERRIDES_CSS = DocPath.create("jquery-ui.overrides.css");
+
     /** The name of the directory for the jQuery. */
     public static final DocPath JQUERY_FILES = DocPath.create("script-dir");
 
-    /** The name of the default jQuery stylesheet file. */
-    public static final DocPath JQUERY_STYLESHEET_FILE = DocPath.create("jquery-ui.css");
-
     /** The name of the default jQuery javascript file. */
-    public static final DocPath JQUERY_JS_3_4 = DocPath.create("jquery-3.4.1.js");
+    public static final DocPath JQUERY_JS = DocPath.create("jquery-3.5.1.min.js");
 
-    /** The name of the default jQuery javascript file. */
-    public static final DocPath JQUERY_JS = DocPath.create("jquery-ui.js");
+    /** The name of the default jQuery UI stylesheet file. */
+    public static final DocPath JQUERY_UI_CSS = DocPath.create("jquery-ui.min.css");
+
+    /** The name of the default jQuery UI javascript file. */
+    public static final DocPath JQUERY_UI_JS = DocPath.create("jquery-ui.min.js");
 
     /** The name of the member search index js file. */
     public static final DocPath MEMBER_SEARCH_INDEX_JS = DocPath.create("member-search-index.js");

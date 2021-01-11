@@ -48,7 +48,6 @@ import jdk.internal.reflect.Reflection;
  * <p>
  * An application cannot create its own instance of this class.
  *
- * @author  unascribed
  * @see     java.lang.Runtime#getRuntime()
  * @since   1.0
  */
@@ -1046,7 +1045,7 @@ public class Runtime {
                 } else {
                     if (optional.isPresent() && !pre.isPresent()) {
                         throw new IllegalArgumentException("optional component"
-                            + " must be preceeded by a pre-release component"
+                            + " must be preceded by a pre-release component"
                             + " or '+': '" + s + "'");
                     }
                 }

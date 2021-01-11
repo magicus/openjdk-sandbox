@@ -136,7 +136,7 @@ public class LinkFactoryImpl extends LinkFactory {
             vars.addAll(((DeclaredType) linkInfo.type).getTypeArguments());
         } else if (ctype != null && utils.isDeclaredType(ctype)) {
             vars.addAll(((DeclaredType) ctype).getTypeArguments());
-        } else if (linkInfo.typeElement != null) {
+        } else if (ctype == null && linkInfo.typeElement != null) {
             linkInfo.typeElement.getTypeParameters().forEach(t -> vars.add(t.asType()));
         } else {
             // Nothing to document.
@@ -206,19 +206,11 @@ public class LinkFactoryImpl extends LinkFactory {
         if (annotations.isEmpty())
             return links;
 
-        List<Content> annos = m_writer.getAnnotations(annotations, false);
-
-        boolean isFirst = true;
-        for (Content anno : annos) {
-            if (!isFirst) {
-                links.add(" ");
-            }
-            links.add(anno);
-            isFirst = false;
-        }
-        if (!annos.isEmpty()) {
-            links.add(" ");
-        }
+        m_writer.getAnnotations(annotations, false)
+                .forEach(a -> {
+                    links.add(a);
+                    links.add(" ");
+                });
 
         return links;
     }

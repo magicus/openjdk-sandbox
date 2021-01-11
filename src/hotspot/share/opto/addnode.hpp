@@ -68,6 +68,11 @@ public:
   // Supplied function to return the additive identity type
   virtual const Type *add_id() const = 0;
 
+  virtual bool operates_on(BasicType bt, bool signed_int) const {
+    assert(bt == T_INT || bt == T_LONG, "unsupported");
+    return false;
+  }
+  static AddNode* make(Node* in1, Node* in2, BasicType bt);
 };
 
 //------------------------------AddINode---------------------------------------
@@ -81,6 +86,10 @@ public:
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual Node* Identity(PhaseGVN* phase);
+  virtual bool operates_on(BasicType bt, bool signed_int) const {
+    assert(bt == T_INT || bt == T_LONG, "unsupported");
+    return bt == T_INT;
+  }
   virtual uint ideal_reg() const { return Op_RegI; }
 };
 
@@ -95,6 +104,10 @@ public:
   virtual const Type *bottom_type() const { return TypeLong::LONG; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual Node* Identity(PhaseGVN* phase);
+  virtual bool operates_on(BasicType bt, bool signed_int) const {
+    assert(bt == T_INT || bt == T_LONG, "unsupported");
+    return bt == T_LONG;
+  }
   virtual uint ideal_reg() const { return Op_RegL; }
 };
 
@@ -172,6 +185,7 @@ public:
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual Node* Identity(PhaseGVN* phase);
   virtual uint ideal_reg() const { return Op_RegI; }
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
 };
 
 //------------------------------OrLNode----------------------------------------
@@ -186,6 +200,7 @@ public:
   virtual const Type *bottom_type() const { return TypeLong::LONG; }
   virtual Node* Identity(PhaseGVN* phase);
   virtual uint ideal_reg() const { return Op_RegL; }
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
 };
 
 //------------------------------XorINode---------------------------------------
@@ -217,9 +232,39 @@ public:
 // all the behavior of addition on a ring.  Only new thing is that we allow
 // 2 equal inputs to be equal.
 class MaxNode : public AddNode {
+private:
+  static Node* build_min_max(Node* a, Node* b, bool is_max, bool is_unsigned, const Type* t, PhaseGVN& gvn);
+  static Node* build_min_max_diff_with_zero(Node* a, Node* b, bool is_max, const Type* t, PhaseGVN& gvn);
+
 public:
   MaxNode( Node *in1, Node *in2 ) : AddNode(in1,in2) {}
   virtual int Opcode() const = 0;
+
+  static Node* unsigned_max(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max(a, b, true, true, t, gvn);
+  }
+
+  static Node* unsigned_min(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max(a, b, false, true, t, gvn);
+  }
+
+  static Node* signed_max(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max(a, b, true, false, t, gvn);
+  }
+
+  static Node* signed_min(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max(a, b, false, false, t, gvn);
+  }
+
+  // max(a-b, 0)
+  static Node* max_diff_with_zero(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max_diff_with_zero(a, b, true, t, gvn);
+  }
+
+  // min(a-b, 0)
+  static Node* min_diff_with_zero(Node* a, Node* b, const Type* t, PhaseGVN& gvn) {
+    return build_min_max_diff_with_zero(a, b, false, t, gvn);
+  }
 };
 
 //------------------------------MaxINode---------------------------------------
@@ -247,6 +292,30 @@ public:
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual uint ideal_reg() const { return Op_RegI; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
+};
+
+//------------------------------MaxLNode---------------------------------------
+// MAXimum of 2 longs.
+class MaxLNode : public MaxNode {
+public:
+  MaxLNode(Node *in1, Node *in2) : MaxNode(in1, in2) {}
+  virtual int Opcode() const;
+  virtual const Type *add_ring(const Type*, const Type*) const { return TypeLong::LONG; }
+  virtual const Type *add_id() const { return TypeLong::make(min_jlong); }
+  virtual const Type *bottom_type() const { return TypeLong::LONG; }
+  virtual uint ideal_reg() const { return Op_RegL; }
+};
+
+//------------------------------MinLNode---------------------------------------
+// MINimum of 2 longs.
+class MinLNode : public MaxNode {
+public:
+  MinLNode(Node *in1, Node *in2) : MaxNode(in1, in2) {}
+  virtual int Opcode() const;
+  virtual const Type *add_ring(const Type*, const Type*) const { return TypeLong::LONG; }
+  virtual const Type *add_id() const { return TypeLong::make(max_jlong); }
+  virtual const Type *bottom_type() const { return TypeLong::LONG; }
+  virtual uint ideal_reg() const { return Op_RegL; }
 };
 
 //------------------------------MaxFNode---------------------------------------

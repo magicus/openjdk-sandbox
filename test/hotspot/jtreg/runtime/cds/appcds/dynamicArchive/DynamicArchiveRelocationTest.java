@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@
  * @build Hello
  * @build sun.hotspot.WhiteBox
  * @run driver ClassFileInstaller -jar hello.jar Hello
- * @run driver ClassFileInstaller sun.hotspot.WhiteBox sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. DynamicArchiveRelocationTest
  */
 
@@ -91,6 +91,8 @@ public class DynamicArchiveRelocationTest extends DynamicArchiveTestBase {
         String topArchiveName  = getNewArchiveName("top");
 
         String runtimeMsg = "Try to map archive(s) at an alternative address";
+        String unmapPrefix = ".*Unmapping region #3 at base 0x.*";
+        String unmapPattern = unmapPrefix + "(Bitmap)";
         String unlockArg = "-XX:+UnlockDiagnosticVMOptions";
 
         // (1) Dump base archive (static)
@@ -121,7 +123,12 @@ public class DynamicArchiveRelocationTest extends DynamicArchiveTestBase {
             "-cp", appJar, mainClass)
             .assertNormalExit(output -> {
                     if (run_reloc) {
-                        output.shouldContain(runtimeMsg);
+                        output.shouldContain(runtimeMsg)
+                              // Check that there are two of the following lines in
+                              // the output. One for static archive and one for
+                              // dynamic archive:
+                              // Unmapping region #3 at base 0x<hex digits> (Bitmap)
+                              .shouldMatchByLine(unmapPrefix, "Hello World", unmapPattern);
                     }
                 });
     }

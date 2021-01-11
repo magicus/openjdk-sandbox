@@ -657,6 +657,11 @@ public class ZipFile implements ZipConstants, Closeable {
         e.size = CENLEN(cen, pos);
         e.csize = CENSIZ(cen, pos);
         e.method = CENHOW(cen, pos);
+        if (CENVEM_FA(cen, pos) == FILE_ATTRIBUTES_UNIX) {
+            // read all bits in this field, including sym link attributes
+            e.extraAttributes = CENATX_PERMS(cen, pos) & 0xFFFF;
+        }
+
         if (elen != 0) {
             int start = pos + CENHDR + nlen;
             e.setExtra0(Arrays.copyOfRange(cen, start, start + elen), true, false);
@@ -790,7 +795,6 @@ public class ZipFile implements ZipConstants, Closeable {
                 throw new UncheckedIOException(ioe);
             }
         }
-
     }
 
     /**
@@ -1092,6 +1096,15 @@ public class ZipFile implements ZipConstants, Closeable {
                 public Stream<String> entryNameStream(ZipFile zip) {
                     return zip.entryNameStream();
                 }
+                @Override
+                public int getExtraAttributes(ZipEntry ze) {
+                    return ze.extraAttributes;
+                }
+                @Override
+                public void setExtraAttributes(ZipEntry ze, int extraAttrs) {
+                    ze.extraAttributes = extraAttrs;
+                }
+
              }
         );
         isWindows = VM.getSavedProperty("os.name").contains("Windows");
@@ -1296,6 +1309,32 @@ public class ZipFile implements ZipConstants, Closeable {
             }
         }
 
+        private static final void checkUTF8(byte[] a, int pos, int len) throws ZipException {
+            try {
+                int end = pos + len;
+                while (pos < end) {
+                    // ASCII fast-path: When checking that a range of bytes is
+                    // valid UTF-8, we can avoid some allocation by skipping
+                    // past bytes in the 0-127 range
+                    if (a[pos] < 0) {
+                        ZipCoder.toStringUTF8(a, pos, end - pos);
+                        break;
+                    }
+                    pos++;
+                }
+            } catch(Exception e) {
+                zerror("invalid CEN header (bad entry name)");
+            }
+        }
+
+        private final void checkEncoding(ZipCoder zc, byte[] a, int pos, int nlen) throws ZipException {
+            try {
+                zc.toString(a, pos, nlen);
+            } catch(Exception e) {
+                zerror("invalid CEN header (bad entry name)");
+            }
+        }
+
         private static class End {
             int  centot;     // 4 bytes
             long cenlen;     // 4 bytes
@@ -1474,12 +1513,18 @@ public class ZipFile implements ZipConstants, Closeable {
                 int nlen   = CENNAM(cen, pos);
                 int elen   = CENEXT(cen, pos);
                 int clen   = CENCOM(cen, pos);
-                if ((CENFLG(cen, pos) & 1) != 0)
+                int flag   = CENFLG(cen, pos);
+                if ((flag & 1) != 0)
                     zerror("invalid CEN header (encrypted entry)");
                 if (method != STORED && method != DEFLATED)
                     zerror("invalid CEN header (bad compression method: " + method + ")");
                 if (entryPos + nlen > limit)
                     zerror("invalid CEN header (bad header size)");
+                if (zc.isUTF8() || (flag & USE_UTF8) != 0) {
+                    checkUTF8(cen, pos + CENHDR, nlen);
+                } else {
+                    checkEncoding(zc, cen, pos + CENHDR, nlen);
+                }
                 // Record the CEN offset and the name hash in our hash cell.
                 hash = zipCoderForPos(pos).normalizedHash(cen, entryPos, nlen);
                 hsh = (hash & 0x7fffffff) % tablelen;

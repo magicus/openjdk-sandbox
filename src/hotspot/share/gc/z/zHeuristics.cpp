@@ -22,10 +22,10 @@
  */
 
 #include "precompiled.hpp"
+#include "gc/shared/gcLogPrecious.hpp"
 #include "gc/z/zCPU.inline.hpp"
 #include "gc/z/zGlobals.hpp"
 #include "gc/z/zHeuristics.hpp"
-#include "logging/log.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/os.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -49,11 +49,13 @@ void ZHeuristics::set_medium_page_size() {
     ZObjectSizeLimitMedium      = ZPageSizeMedium / 8;
     ZObjectAlignmentMediumShift = (int)ZPageSizeMediumShift - 13;
     ZObjectAlignmentMedium      = 1 << ZObjectAlignmentMediumShift;
-
-    log_info(gc, init)("Medium Page Size: " SIZE_FORMAT "M", ZPageSizeMedium / M);
-  } else {
-    log_info(gc, init)("Medium Page Size: N/A");
   }
+}
+
+size_t ZHeuristics::relocation_headroom() {
+  // Calculate headroom needed to avoid in-place relocation. Each worker will try
+  // to allocate a small page, and all workers will share a single medium page.
+  return (MAX2(ParallelGCThreads, ConcGCThreads) * ZPageSizeSmall) + ZPageSizeMedium;
 }
 
 bool ZHeuristics::use_per_cpu_shared_small_pages() {
@@ -68,15 +70,14 @@ static uint nworkers_based_on_ncpus(double cpu_share_in_percent) {
   return ceil(os::initial_active_processor_count() * cpu_share_in_percent / 100.0);
 }
 
-static uint nworkers_based_on_heap_size(double reserve_share_in_percent) {
-  const int nworkers = (MaxHeapSize * (reserve_share_in_percent / 100.0)) / ZPageSizeSmall;
+static uint nworkers_based_on_heap_size(double heap_share_in_percent) {
+  const int nworkers = (MaxHeapSize * (heap_share_in_percent / 100.0)) / ZPageSizeSmall;
   return MAX2(nworkers, 1);
 }
 
 static uint nworkers(double cpu_share_in_percent) {
-  // Cap number of workers so that we don't use more than 2% of the max heap
-  // for the small page reserve. This is useful when using small heaps on
-  // large machines.
+  // Cap number of workers so that they don't use more than 2% of the max heap
+  // during relocation. This is useful when using small heaps on large machines.
   return MIN2(nworkers_based_on_ncpus(cpu_share_in_percent),
               nworkers_based_on_heap_size(2.0));
 }

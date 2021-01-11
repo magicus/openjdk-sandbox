@@ -27,6 +27,7 @@ package jdk.internal.access;
 
 import javax.crypto.SealedObject;
 import java.io.ObjectInputFilter;
+import java.lang.invoke.MethodHandles;
 import java.lang.module.ModuleDescriptor;
 import java.util.ResourceBundle;
 import java.util.jar.JarFile;
@@ -37,7 +38,6 @@ import java.io.ObjectInputStream;
 import java.io.RandomAccessFile;
 import java.security.ProtectionDomain;
 import java.security.Signature;
-import jdk.internal.misc.Unsafe;
 
 /** A repository of "shared secrets", which are a mechanism for
     calling implementation-private methods in another package without
@@ -49,7 +49,7 @@ import jdk.internal.misc.Unsafe;
     for this purpose, namely the loss of compile-time checking. */
 
 public class SharedSecrets {
-    private static final Unsafe unsafe = Unsafe.getUnsafe();
+    private static final MethodHandles.Lookup lookup = MethodHandles.lookup();
     private static JavaAWTAccess javaAWTAccess;
     private static JavaAWTFontAccess javaAWTFontAccess;
     private static JavaBeansAccess javaBeansAccess;
@@ -70,6 +70,7 @@ public class SharedSecrets {
     private static JavaNetUriAccess javaNetUriAccess;
     private static JavaNetURLAccess javaNetURLAccess;
     private static JavaNioAccess javaNioAccess;
+    private static JavaUtilCollectionAccess javaUtilCollectionAccess;
     private static JavaUtilJarAccess javaUtilJarAccess;
     private static JavaUtilZipFileAccess javaUtilZipFileAccess;
     private static JavaUtilResourceBundleAccess javaUtilResourceBundleAccess;
@@ -77,11 +78,24 @@ public class SharedSecrets {
     private static JavaSecuritySignatureAccess javaSecuritySignatureAccess;
     private static JavaxCryptoSealedObjectAccess javaxCryptoSealedObjectAccess;
 
+    public static void setJavaUtilCollectionAccess(JavaUtilCollectionAccess juca) {
+        javaUtilCollectionAccess = juca;
+    }
+
+    public static JavaUtilCollectionAccess getJavaUtilCollectionAccess() {
+        if (javaUtilCollectionAccess == null) {
+            try {
+                Class.forName("java.util.ImmutableCollections$Access", true, null);
+            } catch (ClassNotFoundException e) {};
+        }
+        return javaUtilCollectionAccess;
+    }
+
     public static JavaUtilJarAccess javaUtilJarAccess() {
         if (javaUtilJarAccess == null) {
             // Ensure JarFile is initialized; we know that this class
             // provides the shared secret
-            unsafe.ensureClassInitialized(JarFile.class);
+            ensureClassInitialized(JarFile.class);
         }
         return javaUtilJarAccess;
     }
@@ -105,8 +119,7 @@ public class SharedSecrets {
     public static JavaLangInvokeAccess getJavaLangInvokeAccess() {
         if (javaLangInvokeAccess == null) {
             try {
-                Class<?> c = Class.forName("java.lang.invoke.MethodHandleImpl");
-                unsafe.ensureClassInitialized(c);
+                Class.forName("java.lang.invoke.MethodHandleImpl", true, null);
             } catch (ClassNotFoundException e) {};
         }
         return javaLangInvokeAccess;
@@ -118,7 +131,7 @@ public class SharedSecrets {
 
     public static JavaLangModuleAccess getJavaLangModuleAccess() {
         if (javaLangModuleAccess == null) {
-            unsafe.ensureClassInitialized(ModuleDescriptor.class);
+            ensureClassInitialized(ModuleDescriptor.class);
         }
         return javaLangModuleAccess;
     }
@@ -145,7 +158,7 @@ public class SharedSecrets {
 
     public static JavaNetUriAccess getJavaNetUriAccess() {
         if (javaNetUriAccess == null)
-            unsafe.ensureClassInitialized(java.net.URI.class);
+            ensureClassInitialized(java.net.URI.class);
         return javaNetUriAccess;
     }
 
@@ -155,7 +168,7 @@ public class SharedSecrets {
 
     public static JavaNetURLAccess getJavaNetURLAccess() {
         if (javaNetURLAccess == null)
-            unsafe.ensureClassInitialized(java.net.URL.class);
+            ensureClassInitialized(java.net.URL.class);
         return javaNetURLAccess;
     }
 
@@ -165,7 +178,7 @@ public class SharedSecrets {
 
     public static JavaNetInetAddressAccess getJavaNetInetAddressAccess() {
         if (javaNetInetAddressAccess == null)
-            unsafe.ensureClassInitialized(java.net.InetAddress.class);
+            ensureClassInitialized(java.net.InetAddress.class);
         return javaNetInetAddressAccess;
     }
 
@@ -175,7 +188,7 @@ public class SharedSecrets {
 
     public static JavaNetHttpCookieAccess getJavaNetHttpCookieAccess() {
         if (javaNetHttpCookieAccess == null)
-            unsafe.ensureClassInitialized(java.net.HttpCookie.class);
+            ensureClassInitialized(java.net.HttpCookie.class);
         return javaNetHttpCookieAccess;
     }
 
@@ -187,7 +200,7 @@ public class SharedSecrets {
         if (javaNioAccess == null) {
             // Ensure java.nio.Buffer is initialized, which provides the
             // shared secret.
-            unsafe.ensureClassInitialized(java.nio.Buffer.class);
+            ensureClassInitialized(java.nio.Buffer.class);
         }
         return javaNioAccess;
     }
@@ -198,7 +211,7 @@ public class SharedSecrets {
 
     public static JavaIOAccess getJavaIOAccess() {
         if (javaIOAccess == null) {
-            unsafe.ensureClassInitialized(Console.class);
+            ensureClassInitialized(Console.class);
         }
         return javaIOAccess;
     }
@@ -209,7 +222,7 @@ public class SharedSecrets {
 
     public static JavaIOFilePermissionAccess getJavaIOFilePermissionAccess() {
         if (javaIOFilePermissionAccess == null)
-            unsafe.ensureClassInitialized(FilePermission.class);
+            ensureClassInitialized(FilePermission.class);
 
         return javaIOFilePermissionAccess;
     }
@@ -220,7 +233,7 @@ public class SharedSecrets {
 
     public static JavaIOFileDescriptorAccess getJavaIOFileDescriptorAccess() {
         if (javaIOFileDescriptorAccess == null)
-            unsafe.ensureClassInitialized(FileDescriptor.class);
+            ensureClassInitialized(FileDescriptor.class);
 
         return javaIOFileDescriptorAccess;
     }
@@ -231,14 +244,14 @@ public class SharedSecrets {
 
     public static JavaSecurityAccess getJavaSecurityAccess() {
         if (javaSecurityAccess == null) {
-            unsafe.ensureClassInitialized(ProtectionDomain.class);
+            ensureClassInitialized(ProtectionDomain.class);
         }
         return javaSecurityAccess;
     }
 
     public static JavaUtilZipFileAccess getJavaUtilZipFileAccess() {
         if (javaUtilZipFileAccess == null)
-            unsafe.ensureClassInitialized(java.util.zip.ZipFile.class);
+            ensureClassInitialized(java.util.zip.ZipFile.class);
         return javaUtilZipFileAccess;
     }
 
@@ -276,7 +289,7 @@ public class SharedSecrets {
 
     public static JavaUtilResourceBundleAccess getJavaUtilResourceBundleAccess() {
         if (javaUtilResourceBundleAccess == null)
-            unsafe.ensureClassInitialized(ResourceBundle.class);
+            ensureClassInitialized(ResourceBundle.class);
         return javaUtilResourceBundleAccess;
     }
 
@@ -286,7 +299,7 @@ public class SharedSecrets {
 
     public static JavaObjectInputStreamReadString getJavaObjectInputStreamReadString() {
         if (javaObjectInputStreamReadString == null) {
-            unsafe.ensureClassInitialized(ObjectInputStream.class);
+            ensureClassInitialized(ObjectInputStream.class);
         }
         return javaObjectInputStreamReadString;
     }
@@ -297,7 +310,7 @@ public class SharedSecrets {
 
     public static JavaObjectInputStreamAccess getJavaObjectInputStreamAccess() {
         if (javaObjectInputStreamAccess == null) {
-            unsafe.ensureClassInitialized(ObjectInputStream.class);
+            ensureClassInitialized(ObjectInputStream.class);
         }
         return javaObjectInputStreamAccess;
     }
@@ -308,7 +321,7 @@ public class SharedSecrets {
 
     public static JavaObjectInputFilterAccess getJavaObjectInputFilterAccess() {
         if (javaObjectInputFilterAccess == null) {
-            unsafe.ensureClassInitialized(ObjectInputFilter.Config.class);
+            ensureClassInitialized(ObjectInputFilter.Config.class);
         }
         return javaObjectInputFilterAccess;
     }
@@ -323,7 +336,7 @@ public class SharedSecrets {
 
     public static JavaIORandomAccessFileAccess getJavaIORandomAccessFileAccess() {
         if (javaIORandomAccessFileAccess == null) {
-            unsafe.ensureClassInitialized(RandomAccessFile.class);
+            ensureClassInitialized(RandomAccessFile.class);
         }
         return javaIORandomAccessFileAccess;
     }
@@ -334,7 +347,7 @@ public class SharedSecrets {
 
     public static JavaSecuritySignatureAccess getJavaSecuritySignatureAccess() {
         if (javaSecuritySignatureAccess == null) {
-            unsafe.ensureClassInitialized(Signature.class);
+            ensureClassInitialized(Signature.class);
         }
         return javaSecuritySignatureAccess;
     }
@@ -345,8 +358,14 @@ public class SharedSecrets {
 
     public static JavaxCryptoSealedObjectAccess getJavaxCryptoSealedObjectAccess() {
         if (javaxCryptoSealedObjectAccess == null) {
-            unsafe.ensureClassInitialized(SealedObject.class);
+            ensureClassInitialized(SealedObject.class);
         }
         return javaxCryptoSealedObjectAccess;
+    }
+
+    private static void ensureClassInitialized(Class<?> c) {
+        try {
+            MethodHandles.lookup().ensureInitialized(c);
+        } catch (IllegalAccessException e) {}
     }
 }

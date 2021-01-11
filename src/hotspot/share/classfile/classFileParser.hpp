@@ -132,6 +132,7 @@ class ClassFileParser {
   Array<u2>* _inner_classes;
   Array<u2>* _nest_members;
   u2 _nest_host;
+  Array<u2>* _permitted_subclasses;
   Array<RecordComponent*>* _record_components;
   Array<InstanceKlass*>* _local_interfaces;
   Array<InstanceKlass*>* _transitive_interfaces;
@@ -316,7 +317,11 @@ class ClassFileParser {
                                                         int length,
                                                         TRAPS);
 
+  // Check for circularity in InnerClasses attribute.
+  bool check_inner_classes_circularity(const ConstantPool* cp, int length, TRAPS);
+
   u2   parse_classfile_inner_classes_attribute(const ClassFileStream* const cfs,
+                                               const ConstantPool* cp,
                                                const u1* const inner_classes_attribute_start,
                                                bool parsed_enclosingmethod_attribute,
                                                u2 enclosing_method_class_index,
@@ -327,11 +332,16 @@ class ClassFileParser {
                                             const u1* const nest_members_attribute_start,
                                             TRAPS);
 
+  u2 parse_classfile_permitted_subclasses_attribute(const ClassFileStream* const cfs,
+                                                    const u1* const permitted_subclasses_attribute_start,
+                                                    TRAPS);
+
   u2 parse_classfile_record_attribute(const ClassFileStream* const cfs,
                                       const ConstantPool* cp,
                                       const u1* const record_attribute_start,
                                       TRAPS);
 
+  bool supports_sealed_types();
   bool supports_records();
 
   void parse_classfile_attributes(const ClassFileStream* const cfs,
@@ -368,8 +378,18 @@ class ClassFileParser {
                              const char* signature,
                              TRAPS) const;
 
+  void classfile_icce_error(const char* msg,
+                            const Klass* k,
+                            TRAPS) const;
+
+  void classfile_ucve_error(const char* msg,
+                            const Symbol* class_name,
+                            u2 major,
+                            u2 minor,
+                            TRAPS) const;
+
   inline void guarantee_property(bool b, const char* msg, TRAPS) const {
-    if (!b) { classfile_parse_error(msg, CHECK); }
+    if (!b) { classfile_parse_error(msg, THREAD); return; }
   }
 
   void report_assert_property_failure(const char* msg, TRAPS) const PRODUCT_RETURN;
@@ -414,14 +434,14 @@ class ClassFileParser {
                                  const char* msg,
                                  int index,
                                  TRAPS) const {
-    if (!b) { classfile_parse_error(msg, index, CHECK); }
+    if (!b) { classfile_parse_error(msg, index, THREAD); return; }
   }
 
   inline void guarantee_property(bool b,
                                  const char* msg,
                                  const char *name,
                                  TRAPS) const {
-    if (!b) { classfile_parse_error(msg, name, CHECK); }
+    if (!b) { classfile_parse_error(msg, name, THREAD); return; }
   }
 
   inline void guarantee_property(bool b,
@@ -429,7 +449,7 @@ class ClassFileParser {
                                  int index,
                                  const char *name,
                                  TRAPS) const {
-    if (!b) { classfile_parse_error(msg, index, name, CHECK); }
+    if (!b) { classfile_parse_error(msg, index, name, THREAD); return; }
   }
 
   void throwIllegalSignature(const char* type,
@@ -454,12 +474,20 @@ class ClassFileParser {
                                      const Symbol* signature,
                                      TRAPS) const;
 
+  void verify_class_version(u2 major, u2 minor, Symbol* class_name, TRAPS);
+
   void verify_legal_class_modifiers(jint flags, TRAPS) const;
   void verify_legal_field_modifiers(jint flags, bool is_interface, TRAPS) const;
   void verify_legal_method_modifiers(jint flags,
                                      bool is_interface,
                                      const Symbol* name,
                                      TRAPS) const;
+
+  void check_super_class_access(const InstanceKlass* this_klass,
+                                TRAPS);
+
+  void check_super_interface_access(const InstanceKlass* this_klass,
+                                    TRAPS);
 
   const char* skip_over_field_signature(const char* signature,
                                         bool void_ok,
@@ -526,13 +554,6 @@ class ClassFileParser {
                                const u1* annotation_default,
                                int annotation_default_length,
                                TRAPS);
-
-  // lays out fields in class and returns the total oopmap count
-  void layout_fields(ConstantPool* cp,
-                     const FieldAllocationCount* fac,
-                     const ClassAnnotationCollector* parsed_annotations,
-                     FieldLayoutInfo* info,
-                     TRAPS);
 
   void update_class_name(Symbol* new_name);
 

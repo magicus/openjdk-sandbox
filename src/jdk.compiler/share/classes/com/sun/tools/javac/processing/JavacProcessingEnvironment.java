@@ -1341,8 +1341,9 @@ public class JavacProcessingEnvironment implements ProcessingEnvironment, Closea
             if (foundError) {
                 for (ClassSymbol cs : symtab.getAllClasses()) {
                     if (cs.classfile != null || cs.kind == ERR) {
+                        Kinds.Kind symKind = cs.kind;
                         cs.reset();
-                        if (cs.kind == ERR) {
+                        if (symKind == ERR) {
                             cs.type = new ClassType(cs.type.getEnclosingType(), null, cs);
                         }
                         if (cs.isCompleted()) {
@@ -1429,21 +1430,25 @@ public class JavacProcessingEnvironment implements ProcessingEnvironment, Closea
 
         errorStatus = errorStatus || (compiler.errorCount() > 0);
 
-        round.finalCompiler();
 
         if (newSourceFiles.size() > 0)
             roots = roots.appendList(compiler.parseFiles(newSourceFiles));
 
         errorStatus = errorStatus || (compiler.errorCount() > 0);
 
-        // Free resources
-        this.close();
-
         if (errorStatus && compiler.errorCount() == 0) {
             compiler.log.nerrors++;
         }
 
-        compiler.enterTreesIfNeeded(roots);
+        if (compiler.continueAfterProcessAnnotations()) {
+            round.finalCompiler();
+            compiler.enterTrees(compiler.initModules(roots));
+        } else {
+            compiler.todo.clear();
+        }
+
+        // Free resources
+        this.close();
 
         if (!taskListener.isEmpty())
             taskListener.finished(new TaskEvent(TaskEvent.Kind.ANNOTATION_PROCESSING));
@@ -1641,6 +1646,8 @@ public class JavacProcessingEnvironment implements ProcessingEnvironment, Closea
                         List<JCAnnotation> originalAnnos = rc.getOriginalAnnos();
                         originalAnnos.stream().forEach(a -> visitAnnotation(a));
                     }
+                    // we should empty the list of permitted subclasses for next round
+                    node.sym.permitted = List.nil();
                 }
                 node.sym = null;
             }

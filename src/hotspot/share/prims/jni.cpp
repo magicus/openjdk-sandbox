@@ -32,6 +32,7 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/javaClasses.inline.hpp"
+#include "classfile/javaThreadStatus.hpp"
 #include "classfile/moduleEntry.hpp"
 #include "classfile/modules.hpp"
 #include "classfile/symbolTable.hpp"
@@ -51,6 +52,7 @@
 #include "oops/arrayOop.inline.hpp"
 #include "oops/instanceKlass.inline.hpp"
 #include "oops/instanceOop.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/markWord.hpp"
 #include "oops/method.hpp"
 #include "oops/objArrayKlass.hpp"
@@ -93,7 +95,7 @@
 
 static jint CurrentVersion = JNI_VERSION_10;
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
 extern LONG WINAPI topLevelExceptionFilter(_EXCEPTION_POINTERS* );
 #endif
 
@@ -316,23 +318,11 @@ JNI_ENTRY(jclass, jni_DefineClass(JNIEnv *env, const char *name, jobject loaderR
   jclass cls = NULL;
   DT_RETURN_MARK(DefineClass, jclass, (const jclass&)cls);
 
-  TempNewSymbol class_name = NULL;
-  // Since exceptions can be thrown, class initialization can take place
-  // if name is NULL no check for class name in .class stream has to be made.
-  if (name != NULL) {
-    const int str_len = (int)strlen(name);
-    if (str_len > Symbol::max_length()) {
-      // It's impossible to create this class;  the name cannot fit
-      // into the constant pool.
-      Exceptions::fthrow(THREAD_AND_LOCATION,
-                         vmSymbols::java_lang_NoClassDefFoundError(),
-                         "Class name exceeds maximum length of %d: %s",
-                         Symbol::max_length(),
-                         name);
-      return 0;
-    }
-    class_name = SymbolTable::new_symbol(name);
-  }
+  // Class resolution will get the class name from the .class stream if the name is null.
+  TempNewSymbol class_name = name == NULL ? NULL :
+    SystemDictionary::class_name_symbol(name, vmSymbols::java_lang_NoClassDefFoundError(),
+                                        CHECK_NULL);
+
   ResourceMark rm(THREAD);
   ClassFileStream st((u1*)buf, bufLen, NULL, ClassFileStream::verify);
   Handle class_loader (THREAD, JNIHandles::resolve(loaderRef));
@@ -341,7 +331,7 @@ JNI_ENTRY(jclass, jni_DefineClass(JNIEnv *env, const char *name, jobject loaderR
     // check whether the current caller thread holds the lock or not.
     // If not, increment the corresponding counter
     if (ObjectSynchronizer::
-        query_lock_ownership((JavaThread*)THREAD, class_loader) !=
+        query_lock_ownership(thread, class_loader) !=
         ObjectSynchronizer::owner_self) {
       ClassLoader::sync_JNIDefineClassLockFreeCounter()->inc();
     }
@@ -356,8 +346,7 @@ JNI_ENTRY(jclass, jni_DefineClass(JNIEnv *env, const char *name, jobject loaderR
     trace_class_resolution(k);
   }
 
-  cls = (jclass)JNIHandles::make_local(
-    env, k->java_mirror());
+  cls = (jclass)JNIHandles::make_local(THREAD, k->java_mirror());
   return cls;
 JNI_END
 
@@ -374,19 +363,10 @@ JNI_ENTRY(jclass, jni_FindClass(JNIEnv *env, const char *name))
   jclass result = NULL;
   DT_RETURN_MARK(FindClass, jclass, (const jclass&)result);
 
-  // Sanity check the name:  it cannot be null or larger than the maximum size
-  // name we can fit in the constant pool.
-  if (name == NULL) {
-    THROW_MSG_0(vmSymbols::java_lang_NoClassDefFoundError(), "No class name given");
-  }
-  if ((int)strlen(name) > Symbol::max_length()) {
-    Exceptions::fthrow(THREAD_AND_LOCATION,
-                       vmSymbols::java_lang_NoClassDefFoundError(),
-                       "Class name exceeds maximum length of %d: %s",
-                       Symbol::max_length(),
-                       name);
-    return 0;
-  }
+  // This should be ClassNotFoundException imo.
+  TempNewSymbol class_name =
+    SystemDictionary::class_name_symbol(name, vmSymbols::java_lang_NoClassDefFoundError(),
+                                        CHECK_NULL);
 
   //%note jni_3
   Handle protection_domain;
@@ -418,8 +398,7 @@ JNI_ENTRY(jclass, jni_FindClass(JNIEnv *env, const char *name))
     }
   }
 
-  TempNewSymbol sym = SymbolTable::new_symbol(name);
-  result = find_class_from_class_loader(env, sym, true, loader,
+  result = find_class_from_class_loader(env, class_name, true, loader,
                                         protection_domain, true, thread);
 
   if (log_is_enabled(Debug, class, resolve) && result != NULL) {
@@ -523,7 +502,7 @@ JNI_ENTRY(jobject, jni_ToReflectedMethod(JNIEnv *env, jclass cls, jmethodID meth
   } else {
     reflection_method = Reflection::new_method(m, false, CHECK_NULL);
   }
-  ret = JNIHandles::make_local(env, reflection_method);
+  ret = JNIHandles::make_local(THREAD, reflection_method);
   return ret;
 JNI_END
 
@@ -557,7 +536,7 @@ JNI_ENTRY(jclass, jni_GetSuperclass(JNIEnv *env, jclass sub))
                                  : k->super() ) );
   assert(super == super2,
          "java_super computation depends on interface, array, other super");
-  obj = (super == NULL) ? NULL : (jclass) JNIHandles::make_local(super->java_mirror());
+  obj = (super == NULL) ? NULL : (jclass) JNIHandles::make_local(THREAD, super->java_mirror());
   return obj;
 JNI_END
 
@@ -645,7 +624,7 @@ JNI_ENTRY_NO_PRESERVE(jthrowable, jni_ExceptionOccurred(JNIEnv *env))
 
   jni_check_async_exceptions(thread);
   oop exception = thread->pending_exception();
-  jthrowable ret = (jthrowable) JNIHandles::make_local(env, exception);
+  jthrowable ret = (jthrowable) JNIHandles::make_local(THREAD, exception);
 
   HOTSPOT_JNI_EXCEPTIONOCCURRED_RETURN(ret);
   return ret;
@@ -776,7 +755,7 @@ JNI_ENTRY(jobject, jni_NewGlobalRef(JNIEnv *env, jobject ref))
   HOTSPOT_JNI_NEWGLOBALREF_ENTRY(env, ref);
 
   Handle ref_handle(thread, JNIHandles::resolve(ref));
-  jobject ret = JNIHandles::make_global(ref_handle);
+  jobject ret = JNIHandles::make_global(ref_handle, AllocFailStrategy::RETURN_NULL);
 
   HOTSPOT_JNI_NEWGLOBALREF_RETURN(ret);
   return ret;
@@ -820,7 +799,8 @@ JNI_ENTRY(jobject, jni_NewLocalRef(JNIEnv *env, jobject ref))
 
   HOTSPOT_JNI_NEWLOCALREF_ENTRY(env, ref);
 
-  jobject ret = JNIHandles::make_local(env, JNIHandles::resolve(ref));
+  jobject ret = JNIHandles::make_local(THREAD, JNIHandles::resolve(ref),
+                                       AllocFailStrategy::RETURN_NULL);
 
   HOTSPOT_JNI_NEWLOCALREF_RETURN(ret);
   return ret;
@@ -890,7 +870,6 @@ class JNI_ArgumentPusher : public SignatureIterator {
 
 
 class JNI_ArgumentPusherVaArg : public JNI_ArgumentPusher {
- protected:
   va_list _ap;
 
   void set_ap(va_list rap) {
@@ -924,6 +903,10 @@ class JNI_ArgumentPusherVaArg : public JNI_ArgumentPusher {
   JNI_ArgumentPusherVaArg(jmethodID method_id, va_list rap)
       : JNI_ArgumentPusher(Method::resolve_jmethod_id(method_id)) {
     set_ap(rap);
+  }
+
+  ~JNI_ArgumentPusherVaArg() {
+    va_end(_ap);
   }
 
   virtual void push_arguments_on(JavaCallArguments* arguments) {
@@ -998,7 +981,7 @@ static void jni_invoke_static(JNIEnv *env, JavaValue* result, jobject receiver, 
 
   // Convert result
   if (is_reference_type(result->get_type())) {
-    result->set_jobject(JNIHandles::make_local(env, (oop) result->get_jobject()));
+    result->set_jobject(JNIHandles::make_local(THREAD, (oop) result->get_jobject()));
   }
 }
 
@@ -1060,7 +1043,7 @@ static void jni_invoke_nonstatic(JNIEnv *env, JavaValue* result, jobject receive
 
   // Convert result
   if (is_reference_type(result->get_type())) {
-    result->set_jobject(JNIHandles::make_local(env, (oop) result->get_jobject()));
+    result->set_jobject(JNIHandles::make_local(THREAD, (oop) result->get_jobject()));
   }
 }
 
@@ -1076,7 +1059,7 @@ JNI_ENTRY(jobject, jni_AllocObject(JNIEnv *env, jclass clazz))
   DT_RETURN_MARK(AllocObject, jobject, (const jobject&)ret);
 
   instanceOop i = InstanceKlass::allocate_instance(JNIHandles::resolve_non_null(clazz), CHECK_NULL);
-  ret = JNIHandles::make_local(env, i);
+  ret = JNIHandles::make_local(THREAD, i);
   return ret;
 JNI_END
 
@@ -1092,7 +1075,7 @@ JNI_ENTRY(jobject, jni_NewObjectA(JNIEnv *env, jclass clazz, jmethodID methodID,
   DT_RETURN_MARK(NewObjectA, jobject, (const jobject)obj);
 
   instanceOop i = InstanceKlass::allocate_instance(JNIHandles::resolve_non_null(clazz), CHECK_NULL);
-  obj = JNIHandles::make_local(env, i);
+  obj = JNIHandles::make_local(THREAD, i);
   JavaValue jvalue(T_VOID);
   JNI_ArgumentPusherArray ap(methodID, args);
   jni_invoke_nonstatic(env, &jvalue, obj, JNI_NONVIRTUAL, methodID, &ap, CHECK_NULL);
@@ -1112,7 +1095,7 @@ JNI_ENTRY(jobject, jni_NewObjectV(JNIEnv *env, jclass clazz, jmethodID methodID,
   DT_RETURN_MARK(NewObjectV, jobject, (const jobject&)obj);
 
   instanceOop i = InstanceKlass::allocate_instance(JNIHandles::resolve_non_null(clazz), CHECK_NULL);
-  obj = JNIHandles::make_local(env, i);
+  obj = JNIHandles::make_local(THREAD, i);
   JavaValue jvalue(T_VOID);
   JNI_ArgumentPusherVaArg ap(methodID, args);
   jni_invoke_nonstatic(env, &jvalue, obj, JNI_NONVIRTUAL, methodID, &ap, CHECK_NULL);
@@ -1132,7 +1115,7 @@ JNI_ENTRY(jobject, jni_NewObject(JNIEnv *env, jclass clazz, jmethodID methodID, 
   DT_RETURN_MARK(NewObject, jobject, (const jobject&)obj);
 
   instanceOop i = InstanceKlass::allocate_instance(JNIHandles::resolve_non_null(clazz), CHECK_NULL);
-  obj = JNIHandles::make_local(env, i);
+  obj = JNIHandles::make_local(THREAD, i);
   va_list args;
   va_start(args, methodID);
   JavaValue jvalue(T_VOID);
@@ -1150,7 +1133,7 @@ JNI_ENTRY(jclass, jni_GetObjectClass(JNIEnv *env, jobject obj))
 
   Klass* k = JNIHandles::resolve_non_null(obj)->klass();
   jclass ret =
-    (jclass) JNIHandles::make_local(env, k->java_mirror());
+    (jclass) JNIHandles::make_local(THREAD, k->java_mirror());
 
   HOTSPOT_JNI_GETOBJECTCLASS_RETURN(ret);
   return ret;
@@ -1193,11 +1176,12 @@ static jmethodID get_method_id(JNIEnv *env, jclass clazz, const char *name_str,
     THROW_MSG_0(vmSymbols::java_lang_NoSuchMethodError(), name_str);
   }
 
-  Klass* klass = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(clazz));
+  oop mirror = JNIHandles::resolve_non_null(clazz);
+  Klass* klass = java_lang_Class::as_Klass(mirror);
 
   // Throw a NoSuchMethodError exception if we have an instance of a
   // primitive java.lang.Class
-  if (java_lang_Class::is_primitive(JNIHandles::resolve_non_null(clazz))) {
+  if (java_lang_Class::is_primitive(mirror)) {
     ResourceMark rm;
     THROW_MSG_0(vmSymbols::java_lang_NoSuchMethodError(), err_msg("%s%s.%s%s", is_static ? "static " : "", klass->signature_name(), name_str, sig));
   }
@@ -1932,7 +1916,7 @@ JNI_ENTRY(jobject, jni_GetObjectField(JNIEnv *env, jobject obj, jfieldID fieldID
     o = JvmtiExport::jni_GetField_probe(thread, obj, o, k, fieldID, false);
   }
   oop loaded_obj = HeapAccess<ON_UNKNOWN_OOP_REF>::oop_load_at(o, offset);
-  jobject ret = JNIHandles::make_local(env, loaded_obj);
+  jobject ret = JNIHandles::make_local(THREAD, loaded_obj);
   HOTSPOT_JNI_GETOBJECTFIELD_RETURN(ret);
   return ret;
 JNI_END
@@ -2112,7 +2096,7 @@ JNI_ENTRY(jobject, jni_ToReflectedField(JNIEnv *env, jclass cls, jfieldID fieldI
   }
   assert(found, "bad fieldID passed into jni_ToReflectedField");
   oop reflected = Reflection::new_field(&fd, CHECK_NULL);
-  ret = JNIHandles::make_local(env, reflected);
+  ret = JNIHandles::make_local(THREAD, reflected);
   return ret;
 JNI_END
 
@@ -2172,7 +2156,7 @@ JNI_ENTRY(jobject, jni_GetStaticObjectField(JNIEnv *env, jclass clazz, jfieldID 
   if (JvmtiExport::should_post_field_access()) {
     JvmtiExport::jni_GetField_probe(thread, NULL, NULL, id->holder(), fieldID, true);
   }
-  jobject ret = JNIHandles::make_local(id->holder()->java_mirror()->obj_field(id->offset()));
+  jobject ret = JNIHandles::make_local(THREAD, id->holder()->java_mirror()->obj_field(id->offset()));
   HOTSPOT_JNI_GETSTATICOBJECTFIELD_RETURN(ret);
   return ret;
 JNI_END
@@ -2299,7 +2283,7 @@ JNI_ENTRY(jstring, jni_NewString(JNIEnv *env, const jchar *unicodeChars, jsize l
   jstring ret = NULL;
   DT_RETURN_MARK(NewString, jstring, (const jstring&)ret);
   oop string=java_lang_String::create_oop_from_unicode((jchar*) unicodeChars, len, CHECK_NULL);
-  ret = (jstring) JNIHandles::make_local(env, string);
+  ret = (jstring) JNIHandles::make_local(THREAD, string);
   return ret;
 JNI_END
 
@@ -2375,7 +2359,7 @@ JNI_ENTRY(jstring, jni_NewStringUTF(JNIEnv *env, const char *bytes))
   DT_RETURN_MARK(NewStringUTF, jstring, (const jstring&)ret);
 
   oop result = java_lang_String::create_oop_from_str((char*) bytes, CHECK_NULL);
-  ret = (jstring) JNIHandles::make_local(env, result);
+  ret = (jstring) JNIHandles::make_local(THREAD, result);
   return ret;
 JNI_END
 
@@ -2455,7 +2439,7 @@ JNI_ENTRY(jobjectArray, jni_NewObjectArray(JNIEnv *env, jsize length, jclass ele
       result->obj_at_put(index, initial_value);
     }
   }
-  ret = (jobjectArray) JNIHandles::make_local(env, result);
+  ret = (jobjectArray) JNIHandles::make_local(THREAD, result);
   return ret;
 JNI_END
 
@@ -2469,7 +2453,7 @@ JNI_ENTRY(jobject, jni_GetObjectArrayElement(JNIEnv *env, jobjectArray array, js
   DT_RETURN_MARK(GetObjectArrayElement, jobject, (const jobject&)ret);
   objArrayOop a = objArrayOop(JNIHandles::resolve_non_null(array));
   if (a->is_within_bounds(index)) {
-    ret = JNIHandles::make_local(env, a->obj_at(index));
+    ret = JNIHandles::make_local(THREAD, a->obj_at(index));
     return ret;
   } else {
     ResourceMark rm(THREAD);
@@ -2529,7 +2513,7 @@ JNI_ENTRY(Return, \
   DT_RETURN_MARK(New##Result##Array, Return, (const Return&)ret);\
 \
   oop obj= oopFactory::Allocator(len, CHECK_NULL); \
-  ret = (Return) JNIHandles::make_local(env, obj); \
+  ret = (Return) JNIHandles::make_local(THREAD, obj); \
   return ret;\
 JNI_END
 
@@ -3071,10 +3055,13 @@ JNI_END
 
 JNI_ENTRY(jweak, jni_NewWeakGlobalRef(JNIEnv *env, jobject ref))
   JNIWrapper("jni_NewWeakGlobalRef");
- HOTSPOT_JNI_NEWWEAKGLOBALREF_ENTRY(env, ref);
+  HOTSPOT_JNI_NEWWEAKGLOBALREF_ENTRY(env, ref);
   Handle ref_handle(thread, JNIHandles::resolve(ref));
-  jweak ret = JNIHandles::make_weak_global(ref_handle);
- HOTSPOT_JNI_NEWWEAKGLOBALREF_RETURN(ret);
+  jweak ret = JNIHandles::make_weak_global(ref_handle, AllocFailStrategy::RETURN_NULL);
+  if (ret == NULL) {
+    THROW_OOP_(Universe::out_of_memory_error_c_heap(), NULL);
+  }
+  HOTSPOT_JNI_NEWWEAKGLOBALREF_RETURN(ret);
   return ret;
 JNI_END
 
@@ -3149,6 +3136,12 @@ static bool initializeDirectBufferSupport(JNIEnv* env, JavaThread* thread) {
     bufferClass           = (jclass) env->NewGlobalRef(bufferClass);
     directBufferClass     = (jclass) env->NewGlobalRef(directBufferClass);
     directByteBufferClass = (jclass) env->NewGlobalRef(directByteBufferClass);
+
+    // Global refs will be NULL if out-of-memory (no exception is pending)
+    if (bufferClass == NULL || directBufferClass == NULL || directByteBufferClass == NULL) {
+      directBufferSupportInitializeFailed = 1;
+      return false;
+    }
 
     // Get needed field and method IDs
     directByteBufferConstructor = env->GetMethodID(directByteBufferClass, "<init>", "(JI)V");
@@ -3790,7 +3783,7 @@ static jint JNI_CreateJavaVM_inner(JavaVM **vm, void **penv, void *args) {
           JVMCICompiler* compiler = JVMCICompiler::instance(true, CATCH);
           compiler->bootstrap(THREAD);
           if (HAS_PENDING_EXCEPTION) {
-            HandleMark hm;
+            HandleMark hm(THREAD);
             vm_exit_during_initialization(Handle(THREAD, PENDING_EXCEPTION));
           }
         }
@@ -3824,7 +3817,7 @@ static jint JNI_CreateJavaVM_inner(JavaVM **vm, void **penv, void *args) {
       // otherwise no pending exception possible - VM will already have aborted
       JavaThread* THREAD = JavaThread::current();
       if (HAS_PENDING_EXCEPTION) {
-        HandleMark hm;
+        HandleMark hm(THREAD);
         vm_exit_during_initialization(Handle(THREAD, PENDING_EXCEPTION));
       }
     }
@@ -3853,11 +3846,11 @@ static jint JNI_CreateJavaVM_inner(JavaVM **vm, void **penv, void *args) {
 _JNI_IMPORT_OR_EXPORT_ jint JNICALL JNI_CreateJavaVM(JavaVM **vm, void **penv, void *args) {
   jint result = JNI_ERR;
   // On Windows, let CreateJavaVM run with SEH protection
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
   __try {
 #endif
     result = JNI_CreateJavaVM_inner(vm, penv, args);
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
   } __except(topLevelExceptionFilter((_EXCEPTION_POINTERS*)_exception_info())) {
     // Nothing to do.
   }
@@ -3925,11 +3918,11 @@ static jint JNICALL jni_DestroyJavaVM_inner(JavaVM *vm) {
 jint JNICALL jni_DestroyJavaVM(JavaVM *vm) {
   jint result = JNI_ERR;
   // On Windows, we need SEH protection
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
   __try {
 #endif
     result = jni_DestroyJavaVM_inner(vm);
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
   } __except(topLevelExceptionFilter((_EXCEPTION_POINTERS*)_exception_info())) {
     // Nothing to do.
   }
@@ -3952,7 +3945,7 @@ static jint attach_current_thread(JavaVM *vm, void **penv, void *_args, bool dae
     // If executing from an atexit hook we may be in the VMThread.
     if (t->is_Java_thread()) {
       // If the thread has been attached this operation is a no-op
-      *(JNIEnv**)penv = ((JavaThread*) t)->jni_environment();
+      *(JNIEnv**)penv = t->as_Java_thread()->jni_environment();
       return JNI_OK;
     } else {
       return JNI_ERR;
@@ -3976,7 +3969,7 @@ static jint attach_current_thread(JavaVM *vm, void **penv, void *_args, bool dae
     return JNI_ERR;
   }
   // Enable stack overflow checks
-  thread->create_stack_guard_pages();
+  thread->stack_overflow_state()->create_stack_guard_pages();
 
   thread->initialize_tlab();
 
@@ -4026,7 +4019,7 @@ static jint attach_current_thread(JavaVM *vm, void **penv, void *_args, bool dae
 
   // Set java thread status.
   java_lang_Thread::set_thread_status(thread->threadObj(),
-              java_lang_Thread::RUNNABLE);
+              JavaThreadStatus::RUNNABLE);
 
   // Notify the debugger
   if (JvmtiExport::should_post_thread_life()) {
@@ -4090,7 +4083,7 @@ jint JNICALL jni_DetachCurrentThread(JavaVM *vm)  {
 
   VM_Exit::block_if_vm_exited();
 
-  JavaThread* thread = (JavaThread*) current;
+  JavaThread* thread = current->as_Java_thread();
   if (thread->has_last_Java_frame()) {
     HOTSPOT_JNI_DETACHCURRENTTHREAD_RETURN((uint32_t) JNI_ERR);
     // Can't detach a thread that's running java, that can't work.
@@ -4145,7 +4138,7 @@ jint JNICALL jni_GetEnv(JavaVM *vm, void **penv, jint version) {
   Thread* thread = Thread::current_or_null();
   if (thread != NULL && thread->is_Java_thread()) {
     if (Threads::is_supported_jni_version_including_1_1(version)) {
-      *(JNIEnv**)penv = ((JavaThread*) thread)->jni_environment();
+      *(JNIEnv**)penv = thread->as_Java_thread()->jni_environment();
       ret = JNI_OK;
       return ret;
 

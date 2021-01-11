@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -640,8 +640,12 @@ public final class Unsafe {
         if (f == null) {
             throw new NullPointerException();
         }
-        if (f.getDeclaringClass().isHidden()) {
+        Class<?> declaringClass = f.getDeclaringClass();
+        if (declaringClass.isHidden()) {
             throw new UnsupportedOperationException("can't get field offset on a hidden class: " + f);
+        }
+        if (declaringClass.isRecord()) {
+            throw new UnsupportedOperationException("can't get field offset on a record class: " + f);
         }
         return theInternalUnsafe.objectFieldOffset(f);
     }
@@ -668,8 +672,12 @@ public final class Unsafe {
         if (f == null) {
             throw new NullPointerException();
         }
-        if (f.getDeclaringClass().isHidden()) {
+        Class<?> declaringClass = f.getDeclaringClass();
+        if (declaringClass.isHidden()) {
             throw new UnsupportedOperationException("can't get field offset on a hidden class: " + f);
+        }
+        if (declaringClass.isRecord()) {
+            throw new UnsupportedOperationException("can't get field offset on a record class: " + f);
         }
         return theInternalUnsafe.staticFieldOffset(f);
     }
@@ -689,8 +697,12 @@ public final class Unsafe {
         if (f == null) {
             throw new NullPointerException();
         }
-        if (f.getDeclaringClass().isHidden()) {
+        Class<?> declaringClass = f.getDeclaringClass();
+        if (declaringClass.isHidden()) {
             throw new UnsupportedOperationException("can't get base address on a hidden class: " + f);
+        }
+        if (declaringClass.isRecord()) {
+            throw new UnsupportedOperationException("can't get base address on a record class: " + f);
         }
         return theInternalUnsafe.staticFieldBase(f);
     }
@@ -699,8 +711,19 @@ public final class Unsafe {
      * Detects if the given class may need to be initialized. This is often
      * needed in conjunction with obtaining the static field base of a
      * class.
+     *
+     * @deprecated No replacement API for this method.  As multiple threads
+     * may be trying to initialize the same class or interface at the same time.
+     * The only reliable result returned by this method is {@code false}
+     * indicating that the given class has been initialized.  Instead, simply
+     * call {@link java.lang.invoke.MethodHandles.Lookup#ensureInitialized(Class)}
+     * that does nothing if the given class has already been initialized.
+     * This method is subject to removal in a future version of JDK.
+     *
      * @return false only if a call to {@code ensureClassInitialized} would have no effect
+     *
      */
+    @Deprecated(since = "15", forRemoval = true)
     @ForceInline
     public boolean shouldBeInitialized(Class<?> c) {
         return theInternalUnsafe.shouldBeInitialized(c);
@@ -710,7 +733,11 @@ public final class Unsafe {
      * Ensures the given class has been initialized. This is often
      * needed in conjunction with obtaining the static field base of a
      * class.
+     *
+     * @deprecated Use the {@link java.lang.invoke.MethodHandles.Lookup#ensureInitialized(Class)}
+     * method instead.  This method is subject to removal in a future version of JDK.
      */
+    @Deprecated(since = "15", forRemoval = true)
     @ForceInline
     public void ensureClassInitialized(Class<?> c) {
         theInternalUnsafe.ensureClassInitialized(c);
@@ -840,15 +867,17 @@ public final class Unsafe {
      * <li>InterfaceMethodRef: (NYI) a method handle to invoke on that call site's arguments
      * </ul>
      *
-     * @deprecated Use the {@link java.lang.invoke.MethodHandles.Lookup#defineHiddenClass(byte[], boolean, MethodHandles.Lookup.ClassOption...)}
-     * method.
+     * @deprecated Use {@link java.lang.invoke.MethodHandles.Lookup#defineHiddenClass(byte[], boolean, MethodHandles.Lookup.ClassOption...)}
+     * or {@link java.lang.invoke.MethodHandles.Lookup#defineHiddenClassWithClassData(byte[], Object, boolean, MethodHandles.Lookup.ClassOption...)}
+     * instead.
      *
      * @param hostClass context for linkage, access control, protection domain, and class loader
      * @param data      bytes of a class file
      * @param cpPatches where non-null entries exist, they replace corresponding CP entries in data
      */
     @ForceInline
-    @Deprecated(since = "15", forRemoval = false)
+    @Deprecated(since = "15", forRemoval = true)
+    @SuppressWarnings("removal")
     public Class<?> defineAnonymousClass(Class<?> hostClass, byte[] data, Object[] cpPatches) {
         return theInternalUnsafe.defineAnonymousClass(hostClass, data, cpPatches);
     }

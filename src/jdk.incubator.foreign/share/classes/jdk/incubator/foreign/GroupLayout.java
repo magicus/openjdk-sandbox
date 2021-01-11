@@ -25,12 +25,14 @@
  */
 package jdk.incubator.foreign;
 
+import java.lang.constant.Constable;
 import java.lang.constant.ConstantDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.DynamicConstantDesc;
 import java.lang.constant.MethodHandleDesc;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -49,6 +51,9 @@ import java.util.stream.Collectors;
  * ({@code ==}), identity hash code, or synchronization) on instances of
  * {@code GroupLayout} may have unpredictable results and should be avoided.
  * The {@code equals} method should be used for comparisons.
+ *
+ * <p> Unless otherwise specified, passing a {@code null} argument, or an array argument containing one or more {@code null}
+ * elements to a method in this class causes a {@link NullPointerException NullPointerException} to be thrown. </p>
  *
  * @implSpec
  * This class is immutable and thread-safe.
@@ -100,11 +105,11 @@ public final class GroupLayout extends AbstractLayout {
     private final List<MemoryLayout> elements;
 
     GroupLayout(Kind kind, List<MemoryLayout> elements) {
-        this(kind, elements, kind.alignof(elements), Optional.empty());
+        this(kind, elements, kind.alignof(elements), Map.of());
     }
 
-    GroupLayout(Kind kind, List<MemoryLayout> elements, long alignment, Optional<String> name) {
-        super(kind.sizeof(elements), alignment, name);
+    GroupLayout(Kind kind, List<MemoryLayout> elements, long alignment, Map<String, Constable> attributes) {
+        super(kind.sizeof(elements), alignment, attributes);
         this.kind = kind;
         this.elements = elements;
     }
@@ -168,8 +173,8 @@ public final class GroupLayout extends AbstractLayout {
     }
 
     @Override
-    GroupLayout dup(long alignment, Optional<String> name) {
-        return new GroupLayout(kind, elements, alignment, name);
+    GroupLayout dup(long alignment, Map<String, Constable> attributes) {
+        return new GroupLayout(kind, elements, alignment, attributes);
     }
 
     @Override
@@ -184,9 +189,9 @@ public final class GroupLayout extends AbstractLayout {
         for (int i = 0 ; i < elements.size() ; i++) {
             constants[i + 1] = elements.get(i).describeConstable().get();
         }
-        return Optional.of(DynamicConstantDesc.ofNamed(
+        return Optional.of(decorateLayoutConstant(DynamicConstantDesc.ofNamed(
                     ConstantDescs.BSM_INVOKE, kind.name().toLowerCase(),
-                CD_GROUP_LAYOUT, constants));
+                CD_GROUP_LAYOUT, constants)));
     }
 
     //hack: the declarations below are to make javadoc happy; we could have used generics in AbstractLayout
@@ -206,5 +211,13 @@ public final class GroupLayout extends AbstractLayout {
     @Override
     public GroupLayout withBitAlignment(long alignmentBits) {
         return (GroupLayout)super.withBitAlignment(alignmentBits);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public GroupLayout withAttribute(String name, Constable value) {
+        return (GroupLayout)super.withAttribute(name, value);
     }
 }

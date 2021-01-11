@@ -518,13 +518,13 @@ public final class Utils {
     }
 
     public static boolean isSettingVisible(Control c, boolean hasEventHook) {
-        if (c instanceof ThresholdSetting) {
+        if (c.isType(ThresholdSetting.class)) {
             return !hasEventHook;
         }
-        if (c instanceof PeriodSetting) {
+        if (c.isType(PeriodSetting.class)) {
             return hasEventHook;
         }
-        if (c instanceof StackTraceSetting) {
+        if (c.isType(StackTraceSetting.class)) {
             return !hasEventHook;
         }
         return true;
@@ -740,6 +740,12 @@ public final class Utils {
             }
         }
 
+    }
+
+    public static Instant epochNanosToInstant(long epochNanos) {
+        long epochSeconds = epochNanos / 1_000_000_000L;
+        long nanoAdjustment = epochNanos - 1_000_000_000L * epochSeconds;
+        return Instant.ofEpochSecond(epochSeconds, nanoAdjustment);
     }
 
     public static long timeToNanos(Instant timestamp) {

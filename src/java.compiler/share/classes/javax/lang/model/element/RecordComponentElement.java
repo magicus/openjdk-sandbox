@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,19 +26,10 @@
 package javax.lang.model.element;
 
 /**
- * {@preview Associated with records, a preview feature of the Java language.
- *
- *           This class is associated with <i>records</i>, a preview
- *           feature of the Java language. Preview features
- *           may be removed in a future release, or upgraded to permanent
- *           features of the Java language.}
- *
  * Represents a record component.
  *
- * @since 14
+ * @since 16
  */
-@jdk.internal.PreviewFeature(feature=jdk.internal.PreviewFeature.Feature.RECORDS,
-                             essentialAPI=false)
 public interface RecordComponentElement extends Element {
     /**
      * Returns the enclosing element of this record component.
@@ -55,7 +46,7 @@ public interface RecordComponentElement extends Element {
      * Returns the simple name of this record component.
      *
      * <p>The name of each record component must be distinct from the
-     * names of all other record components.
+     * names of all other record components of the same record.
      *
      * @return the simple name of this record component
      *

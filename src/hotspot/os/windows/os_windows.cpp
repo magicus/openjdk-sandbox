@@ -30,11 +30,14 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "code/codeCache.hpp"
 #include "code/icBuffer.hpp"
+#include "code/nativeInst.hpp"
 #include "code/vtableStubs.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
+#include "jvmtifiles/jvmti.h"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/allocation.inline.hpp"
@@ -46,8 +49,8 @@
 #include "prims/jvm_misc.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
-#include "runtime/extendedPC.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/globals_extension.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/java.hpp"
 #include "runtime/javaCalls.hpp"
@@ -71,17 +74,14 @@
 #include "utilities/decoder.hpp"
 #include "utilities/defaultStream.hpp"
 #include "utilities/events.hpp"
-#include "utilities/growableArray.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/vmError.hpp"
 #include "symbolengine.hpp"
 #include "windbghelp.hpp"
 
-
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
-
 
 #include <windows.h>
 #include <sys/types.h>
@@ -121,13 +121,18 @@ static FILETIME process_exit_time;
 static FILETIME process_user_time;
 static FILETIME process_kernel_time;
 
-#ifdef _M_AMD64
+#if defined(_M_ARM64)
+  #define __CPU__ aarch64
+#elif defined(_M_AMD64)
   #define __CPU__ amd64
 #else
   #define __CPU__ i486
 #endif
 
-#if INCLUDE_AOT
+#if defined(USE_VECTORED_EXCEPTION_HANDLING)
+PVOID  topLevelVectoredExceptionHandler = NULL;
+LPTOP_LEVEL_EXCEPTION_FILTER previousUnhandledExceptionFilter = NULL;
+#elif INCLUDE_AOT
 PVOID  topLevelVectoredExceptionHandler = NULL;
 LONG WINAPI topLevelVectoredExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo);
 #endif
@@ -150,7 +155,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     if (ForceTimeHighResolution) {
       timeEndPeriod(1L);
     }
-#if INCLUDE_AOT
+#if defined(USE_VECTORED_EXCEPTION_HANDLING) || INCLUDE_AOT
     if (topLevelVectoredExceptionHandler != NULL) {
       RemoveVectoredExceptionHandler(topLevelVectoredExceptionHandler);
       topLevelVectoredExceptionHandler = NULL;
@@ -172,6 +177,91 @@ static inline double fileTimeAsDouble(FILETIME* time) {
 }
 
 // Implementation of os
+
+#define RANGE_FORMAT                "[" PTR_FORMAT "-" PTR_FORMAT ")"
+#define RANGE_FORMAT_ARGS(p, len)   p2i(p), p2i((address)p + len)
+
+// A number of wrappers for more frequently used system calls, to add standard logging.
+
+struct PreserveLastError {
+  const DWORD v;
+  PreserveLastError() : v(::GetLastError()) {}
+  ~PreserveLastError() { ::SetLastError(v); }
+};
+
+// Logging wrapper for VirtualAlloc
+static LPVOID virtualAlloc(LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect) {
+  LPVOID result = ::VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect);
+  if (result != NULL) {
+    log_trace(os)("VirtualAlloc(" PTR_FORMAT ", " SIZE_FORMAT ", %x, %x) returned " PTR_FORMAT "%s.",
+                  p2i(lpAddress), dwSize, flAllocationType, flProtect, p2i(result),
+                  ((lpAddress != NULL && result != lpAddress) ? " <different base!>" : ""));
+  } else {
+    PreserveLastError ple;
+    log_info(os)("VirtualAlloc(" PTR_FORMAT ", " SIZE_FORMAT ", %x, %x) failed (%u).",
+                  p2i(lpAddress), dwSize, flAllocationType, flProtect, ple.v);
+  }
+  return result;
+}
+
+// Logging wrapper for VirtualFree
+static BOOL virtualFree(LPVOID lpAddress, SIZE_T dwSize, DWORD  dwFreeType) {
+  BOOL result = ::VirtualFree(lpAddress, dwSize, dwFreeType);
+  if (result != FALSE) {
+    log_trace(os)("VirtualFree(" PTR_FORMAT ", " SIZE_FORMAT ", %x) succeeded",
+                  p2i(lpAddress), dwSize, dwFreeType);
+  } else {
+    PreserveLastError ple;
+    log_info(os)("VirtualFree(" PTR_FORMAT ", " SIZE_FORMAT ", %x) failed (%u).",
+                 p2i(lpAddress), dwSize, dwFreeType, ple.v);
+  }
+  return result;
+}
+
+// Logging wrapper for VirtualAllocExNuma
+static LPVOID virtualAllocExNuma(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD  flAllocationType,
+                                 DWORD  flProtect, DWORD  nndPreferred) {
+  LPVOID result = ::VirtualAllocExNuma(hProcess, lpAddress, dwSize, flAllocationType, flProtect, nndPreferred);
+  if (result != NULL) {
+    log_trace(os)("VirtualAllocExNuma(" PTR_FORMAT ", " SIZE_FORMAT ", %x, %x, %x) returned " PTR_FORMAT "%s.",
+                  p2i(lpAddress), dwSize, flAllocationType, flProtect, nndPreferred, p2i(result),
+                  ((lpAddress != NULL && result != lpAddress) ? " <different base!>" : ""));
+  } else {
+    PreserveLastError ple;
+    log_info(os)("VirtualAllocExNuma(" PTR_FORMAT ", " SIZE_FORMAT ", %x, %x, %x) failed (%u).",
+                 p2i(lpAddress), dwSize, flAllocationType, flProtect, nndPreferred, ple.v);
+  }
+  return result;
+}
+
+// Logging wrapper for MapViewOfFileEx
+static LPVOID mapViewOfFileEx(HANDLE hFileMappingObject, DWORD  dwDesiredAccess, DWORD  dwFileOffsetHigh,
+                              DWORD  dwFileOffsetLow, SIZE_T dwNumberOfBytesToMap, LPVOID lpBaseAddress) {
+  LPVOID result = ::MapViewOfFileEx(hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh,
+                                    dwFileOffsetLow, dwNumberOfBytesToMap, lpBaseAddress);
+  if (result != NULL) {
+    log_trace(os)("MapViewOfFileEx(" PTR_FORMAT ", " SIZE_FORMAT ") returned " PTR_FORMAT "%s.",
+                  p2i(lpBaseAddress), dwNumberOfBytesToMap, p2i(result),
+                  ((lpBaseAddress != NULL && result != lpBaseAddress) ? " <different base!>" : ""));
+  } else {
+    PreserveLastError ple;
+    log_info(os)("MapViewOfFileEx(" PTR_FORMAT ", " SIZE_FORMAT ") failed (%u).",
+                 p2i(lpBaseAddress), dwNumberOfBytesToMap, ple.v);
+  }
+  return result;
+}
+
+// Logging wrapper for UnmapViewOfFile
+static BOOL unmapViewOfFile(LPCVOID lpBaseAddress) {
+  BOOL result = ::UnmapViewOfFile(lpBaseAddress);
+  if (result != FALSE) {
+    log_trace(os)("UnmapViewOfFile(" PTR_FORMAT ") succeeded", p2i(lpBaseAddress));
+  } else {
+    PreserveLastError ple;
+    log_info(os)("UnmapViewOfFile(" PTR_FORMAT ") failed (%u).",  p2i(lpBaseAddress), ple.v);
+  }
+  return result;
+}
 
 bool os::unsetenv(const char* name) {
   assert(name != NULL, "Null pointer");
@@ -335,7 +425,6 @@ int os::get_native_stack(address* stack, int frames, int toSkip) {
   return captured;
 }
 
-
 // os::current_stack_base()
 //
 //   Returns the base of the stack, which is the stack's
@@ -459,6 +548,12 @@ static unsigned __stdcall thread_native_entry(Thread* thread) {
 
   log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ").", os::current_thread_id());
 
+#ifdef USE_VECTORED_EXCEPTION_HANDLING
+  // Any exception is caught by the Vectored Exception Handler, so VM can
+  // generate error dump when an exception occurred in non-Java thread
+  // (e.g. VM thread).
+  thread->call_run();
+#else
   // Install a win32 structured exception handler around every thread created
   // by VM, so VM can generate error dump when an exception occurred in non-
   // Java thread (e.g. VM thread).
@@ -468,6 +563,7 @@ static unsigned __stdcall thread_native_entry(Thread* thread) {
                                      (_EXCEPTION_POINTERS*)_exception_info())) {
     // Nothing to do.
   }
+#endif
 
   // Note: at this point the thread object may already have deleted itself.
   // Do not dereference it from here on out.
@@ -1430,15 +1526,18 @@ void * os::dll_load(const char *name, char *ebuf, int ebuflen) {
 
   static const arch_t arch_array[] = {
     {IMAGE_FILE_MACHINE_I386,      (char*)"IA 32"},
-    {IMAGE_FILE_MACHINE_AMD64,     (char*)"AMD 64"}
+    {IMAGE_FILE_MACHINE_AMD64,     (char*)"AMD 64"},
+    {IMAGE_FILE_MACHINE_ARM64,     (char*)"ARM 64"}
   };
-#if (defined _M_AMD64)
+#if (defined _M_ARM64)
+  static const uint16_t running_arch = IMAGE_FILE_MACHINE_ARM64;
+#elif (defined _M_AMD64)
   static const uint16_t running_arch = IMAGE_FILE_MACHINE_AMD64;
 #elif (defined _M_IX86)
   static const uint16_t running_arch = IMAGE_FILE_MACHINE_I386;
 #else
   #error Method os::dll_load requires that one of following \
-         is defined :_M_AMD64 or _M_IX86
+         is defined :_M_AMD64 or _M_IX86 or _M_ARM64
 #endif
 
 
@@ -1607,14 +1706,12 @@ void os::print_os_info(outputStream* st) {
     st->print("N/A ");
   }
 #endif
-  st->print("OS:");
+  st->print_cr("OS:");
   os::win32::print_windows_version(st);
 
   os::win32::print_uptime_info(st);
 
-#ifdef _LP64
   VM_Version::print_platform_virtualization_info(st);
-#endif
 }
 
 void os::win32::print_windows_version(outputStream* st) {
@@ -1735,7 +1832,8 @@ void os::win32::print_windows_version(outputStream* st) {
   SYSTEM_INFO si;
   ZeroMemory(&si, sizeof(SYSTEM_INFO));
   GetNativeSystemInfo(&si);
-  if (si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) {
+  if ((si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) ||
+      (si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64)) {
     st->print(" , 64 bit");
   }
 
@@ -2131,6 +2229,8 @@ static int check_pending_signals() {
       }
     } while (threadIsSuspended);
   }
+  ShouldNotReachHere();
+  return 0; // Satisfy compiler
 }
 
 int os::signal_wait() {
@@ -2141,19 +2241,26 @@ int os::signal_wait() {
 
 LONG Handle_Exception(struct _EXCEPTION_POINTERS* exceptionInfo,
                       address handler) {
-  JavaThread* thread = (JavaThread*) Thread::current_or_null();
+  Thread* thread = Thread::current_or_null();
   // Save pc in thread
-#ifdef _M_AMD64
+#if defined(_M_ARM64)
   // Do not blow up if no thread info available.
   if (thread) {
-    thread->set_saved_exception_pc((address)(DWORD_PTR)exceptionInfo->ContextRecord->Rip);
+    thread->as_Java_thread()->set_saved_exception_pc((address)(DWORD_PTR)exceptionInfo->ContextRecord->Pc);
+  }
+  // Set pc to handler
+  exceptionInfo->ContextRecord->Pc = (DWORD64)handler;
+#elif defined(_M_AMD64)
+  // Do not blow up if no thread info available.
+  if (thread != NULL) {
+    thread->as_Java_thread()->set_saved_exception_pc((address)(DWORD_PTR)exceptionInfo->ContextRecord->Rip);
   }
   // Set pc to handler
   exceptionInfo->ContextRecord->Rip = (DWORD64)handler;
 #else
   // Do not blow up if no thread info available.
-  if (thread) {
-    thread->set_saved_exception_pc((address)(DWORD_PTR)exceptionInfo->ContextRecord->Eip);
+  if (thread != NULL) {
+    thread->as_Java_thread()->set_saved_exception_pc((address)(DWORD_PTR)exceptionInfo->ContextRecord->Eip);
   }
   // Set pc to handler
   exceptionInfo->ContextRecord->Eip = (DWORD)(DWORD_PTR)handler;
@@ -2241,7 +2348,17 @@ const char* os::exception_name(int exception_code, char *buf, size_t size) {
 LONG Handle_IDiv_Exception(struct _EXCEPTION_POINTERS* exceptionInfo) {
   // handle exception caused by idiv; should only happen for -MinInt/-1
   // (division by zero is handled explicitly)
-#ifdef  _M_AMD64
+#if defined(_M_ARM64)
+  PCONTEXT ctx = exceptionInfo->ContextRecord;
+  address pc = (address)ctx->Sp;
+  assert(pc[0] == 0x83, "not an sdiv opcode"); //Fixme did i get the right opcode?
+  assert(ctx->X4 == min_jint, "unexpected idiv exception");
+  // set correct result values and continue after idiv instruction
+  ctx->Pc = (uint64_t)pc + 4;        // idiv reg, reg, reg  is 4 bytes
+  ctx->X4 = (uint64_t)min_jint;      // result
+  ctx->X5 = (uint64_t)0;             // remainder
+  // Continue the execution
+#elif defined(_M_AMD64)
   PCONTEXT ctx = exceptionInfo->ContextRecord;
   address pc = (address)ctx->Rip;
   assert(pc[0] >= Assembler::REX && pc[0] <= Assembler::REX_WRXB && pc[1] == 0xF7 || pc[0] == 0xF7, "not an idiv opcode");
@@ -2272,6 +2389,7 @@ LONG Handle_IDiv_Exception(struct _EXCEPTION_POINTERS* exceptionInfo) {
   return EXCEPTION_CONTINUE_EXECUTION;
 }
 
+#if defined(_M_AMD64) || defined(_M_IX86)
 //-----------------------------------------------------------------------------
 LONG WINAPI Handle_FLT_Exception(struct _EXCEPTION_POINTERS* exceptionInfo) {
   PCONTEXT ctx = exceptionInfo->ContextRecord;
@@ -2317,74 +2435,24 @@ LONG WINAPI Handle_FLT_Exception(struct _EXCEPTION_POINTERS* exceptionInfo) {
 
   return EXCEPTION_CONTINUE_SEARCH;
 }
+#endif
 
 static inline void report_error(Thread* t, DWORD exception_code,
                                 address addr, void* siginfo, void* context) {
   VMError::report_and_die(t, exception_code, addr, siginfo, context);
 
-  // If UseOsErrorReporting, this will return here and save the error file
+  // If UseOSErrorReporting, this will return here and save the error file
   // somewhere where we can find it in the minidump.
 }
-
-bool os::win32::get_frame_at_stack_banging_point(JavaThread* thread,
-        struct _EXCEPTION_POINTERS* exceptionInfo, address pc, frame* fr) {
-  PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-  address addr = (address) exceptionRecord->ExceptionInformation[1];
-  if (Interpreter::contains(pc)) {
-    *fr = os::fetch_frame_from_context((void*)exceptionInfo->ContextRecord);
-    if (!fr->is_first_java_frame()) {
-      // get_frame_at_stack_banging_point() is only called when we
-      // have well defined stacks so java_sender() calls do not need
-      // to assert safe_for_sender() first.
-      *fr = fr->java_sender();
-    }
-  } else {
-    // more complex code with compiled code
-    assert(!Interpreter::contains(pc), "Interpreted methods should have been handled above");
-    CodeBlob* cb = CodeCache::find_blob(pc);
-    if (cb == NULL || !cb->is_nmethod() || cb->is_frame_complete_at(pc)) {
-      // Not sure where the pc points to, fallback to default
-      // stack overflow handling
-      return false;
-    } else {
-      *fr = os::fetch_frame_from_context((void*)exceptionInfo->ContextRecord);
-      // in compiled code, the stack banging is performed just after the return pc
-      // has been pushed on the stack
-      *fr = frame(fr->sp() + 1, fr->fp(), (address)*(fr->sp()));
-      if (!fr->is_java_frame()) {
-        // See java_sender() comment above.
-        *fr = fr->java_sender();
-      }
-    }
-  }
-  assert(fr->is_java_frame(), "Safety check");
-  return true;
-}
-
-#if INCLUDE_AOT
-LONG WINAPI topLevelVectoredExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
-  PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-  address addr = (address) exceptionRecord->ExceptionInformation[1];
-  address pc = (address) exceptionInfo->ContextRecord->Rip;
-
-  // Handle the case where we get an implicit exception in AOT generated
-  // code.  AOT DLL's loaded are not registered for structured exceptions.
-  // If the exception occurred in the codeCache or AOT code, pass control
-  // to our normal exception handler.
-  CodeBlob* cb = CodeCache::find_blob(pc);
-  if (cb != NULL) {
-    return topLevelExceptionFilter(exceptionInfo);
-  }
-
-  return EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
 
 //-----------------------------------------------------------------------------
 LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
   if (InterceptOSException) return EXCEPTION_CONTINUE_SEARCH;
-  DWORD exception_code = exceptionInfo->ExceptionRecord->ExceptionCode;
-#ifdef _M_AMD64
+  PEXCEPTION_RECORD exception_record = exceptionInfo->ExceptionRecord;
+  DWORD exception_code = exception_record->ExceptionCode;
+#if defined(_M_ARM64)
+  address pc = (address) exceptionInfo->ContextRecord->Pc;
+#elif defined(_M_AMD64)
   address pc = (address) exceptionInfo->ContextRecord->Rip;
 #else
   address pc = (address) exceptionInfo->ContextRecord->Eip;
@@ -2402,9 +2470,8 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
   // This is safe to do because we have a new/unique ExceptionInformation
   // code for this condition.
   if (exception_code == EXCEPTION_ACCESS_VIOLATION) {
-    PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-    int exception_subcode = (int) exceptionRecord->ExceptionInformation[0];
-    address addr = (address) exceptionRecord->ExceptionInformation[1];
+    int exception_subcode = (int) exception_record->ExceptionInformation[0];
+    address addr = (address) exception_record->ExceptionInformation[1];
 
     if (exception_subcode == EXCEPTION_INFO_EXEC_VIOLATION) {
       int page_size = os::vm_page_size();
@@ -2468,30 +2535,35 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
 
       // Last unguard failed or not unguarding
       tty->print_raw_cr("Execution protection violation");
-      report_error(t, exception_code, addr, exceptionInfo->ExceptionRecord,
+#if !defined(USE_VECTORED_EXCEPTION_HANDLING)
+      report_error(t, exception_code, addr, exception_record,
                    exceptionInfo->ContextRecord);
+#endif
       return EXCEPTION_CONTINUE_SEARCH;
     }
   }
 #endif // _WIN64
 
+#if defined(_M_AMD64) || defined(_M_IX86)
   if ((exception_code == EXCEPTION_ACCESS_VIOLATION) &&
       VM_Version::is_cpuinfo_segv_addr(pc)) {
     // Verify that OS save/restore AVX registers.
     return Handle_Exception(exceptionInfo, VM_Version::cpuinfo_cont_addr());
   }
+#endif
 
   if (t != NULL && t->is_Java_thread()) {
-    JavaThread* thread = (JavaThread*) t;
+    JavaThread* thread = t->as_Java_thread();
     bool in_java = thread->thread_state() == _thread_in_Java;
+    bool in_native = thread->thread_state() == _thread_in_native;
+    bool in_vm = thread->thread_state() == _thread_in_vm;
 
     // Handle potential stack overflows up front.
     if (exception_code == EXCEPTION_STACK_OVERFLOW) {
-      if (thread->stack_guards_enabled()) {
+      StackOverflow* overflow_state = thread->stack_overflow_state();
+      if (overflow_state->stack_guards_enabled()) {
         if (in_java) {
           frame fr;
-          PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-          address addr = (address) exceptionRecord->ExceptionInformation[1];
           if (os::win32::get_frame_at_stack_banging_point(thread, exceptionInfo, pc, &fr)) {
             assert(fr.is_java_frame(), "Must be a Java frame");
             SharedRuntime::look_for_reserved_stack_annotated_method(thread, fr);
@@ -2500,25 +2572,26 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
         // Yellow zone violation.  The o/s has unprotected the first yellow
         // zone page for us.  Note:  must call disable_stack_yellow_zone to
         // update the enabled status, even if the zone contains only one page.
-        assert(thread->thread_state() != _thread_in_vm, "Undersized StackShadowPages");
-        thread->disable_stack_yellow_reserved_zone();
+        assert(!in_vm, "Undersized StackShadowPages");
+        overflow_state->disable_stack_yellow_reserved_zone();
         // If not in java code, return and hope for the best.
         return in_java
             ? Handle_Exception(exceptionInfo, SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::STACK_OVERFLOW))
             :  EXCEPTION_CONTINUE_EXECUTION;
       } else {
         // Fatal red zone violation.
-        thread->disable_stack_red_zone();
+        overflow_state->disable_stack_red_zone();
         tty->print_raw_cr("An unrecoverable stack overflow has occurred.");
-        report_error(t, exception_code, pc, exceptionInfo->ExceptionRecord,
+#if !defined(USE_VECTORED_EXCEPTION_HANDLING)
+        report_error(t, exception_code, pc, exception_record,
                       exceptionInfo->ContextRecord);
+#endif
         return EXCEPTION_CONTINUE_SEARCH;
       }
     } else if (exception_code == EXCEPTION_ACCESS_VIOLATION) {
-      // Either stack overflow or null pointer exception.
       if (in_java) {
-        PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-        address addr = (address) exceptionRecord->ExceptionInformation[1];
+        // Either stack overflow or null pointer exception.
+        address addr = (address) exception_record->ExceptionInformation[1];
         address stack_end = thread->stack_end();
         if (addr < stack_end && addr >= stack_end - os::vm_page_size()) {
           // Stack overflow.
@@ -2537,65 +2610,54 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
             return Handle_Exception(exceptionInfo, stub);
           }
         }
-        {
 #ifdef _WIN64
-          // If it's a legal stack address map the entire region in
-          //
-          PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
-          address addr = (address) exceptionRecord->ExceptionInformation[1];
-          if (thread->is_in_usable_stack(addr)) {
-            addr = (address)((uintptr_t)addr &
-                             (~((uintptr_t)os::vm_page_size() - (uintptr_t)1)));
-            os::commit_memory((char *)addr, thread->stack_base() - addr,
-                              !ExecMem);
-            return EXCEPTION_CONTINUE_EXECUTION;
-          } else
-#endif
-          {
-            // Null pointer exception.
-            if (MacroAssembler::uses_implicit_null_check((void*)addr)) {
-              address stub = SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::IMPLICIT_NULL);
-              if (stub != NULL) return Handle_Exception(exceptionInfo, stub);
-            }
-            report_error(t, exception_code, pc, exceptionInfo->ExceptionRecord,
-                         exceptionInfo->ContextRecord);
-            return EXCEPTION_CONTINUE_SEARCH;
-          }
+        // If it's a legal stack address map the entire region in
+        if (thread->is_in_usable_stack(addr)) {
+          addr = (address)((uintptr_t)addr &
+                            (~((uintptr_t)os::vm_page_size() - (uintptr_t)1)));
+          os::commit_memory((char *)addr, thread->stack_base() - addr,
+                            !ExecMem);
+          return EXCEPTION_CONTINUE_EXECUTION;
         }
+#endif
+        // Null pointer exception.
+        if (MacroAssembler::uses_implicit_null_check((void*)addr)) {
+          address stub = SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::IMPLICIT_NULL);
+          if (stub != NULL) return Handle_Exception(exceptionInfo, stub);
+        }
+        report_error(t, exception_code, pc, exception_record,
+                      exceptionInfo->ContextRecord);
+        return EXCEPTION_CONTINUE_SEARCH;
       }
 
 #ifdef _WIN64
       // Special care for fast JNI field accessors.
       // jni_fast_Get<Primitive>Field can trap at certain pc's if a GC kicks
       // in and the heap gets shrunk before the field access.
-      if (exception_code == EXCEPTION_ACCESS_VIOLATION) {
-        address addr = JNI_FastGetField::find_slowcase_pc(pc);
-        if (addr != (address)-1) {
-          return Handle_Exception(exceptionInfo, addr);
-        }
+      address slowcase_pc = JNI_FastGetField::find_slowcase_pc(pc);
+      if (slowcase_pc != (address)-1) {
+        return Handle_Exception(exceptionInfo, slowcase_pc);
       }
 #endif
 
       // Stack overflow or null pointer exception in native code.
-      report_error(t, exception_code, pc, exceptionInfo->ExceptionRecord,
+#if !defined(USE_VECTORED_EXCEPTION_HANDLING)
+      report_error(t, exception_code, pc, exception_record,
                    exceptionInfo->ContextRecord);
+#endif
       return EXCEPTION_CONTINUE_SEARCH;
     } // /EXCEPTION_ACCESS_VIOLATION
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     if (exception_code == EXCEPTION_IN_PAGE_ERROR) {
       CompiledMethod* nm = NULL;
-      JavaThread* thread = (JavaThread*)t;
       if (in_java) {
         CodeBlob* cb = CodeCache::find_blob_unsafe(pc);
         nm = (cb != NULL) ? cb->as_compiled_method_or_null() : NULL;
       }
 
-      bool is_unsafe_arraycopy = (thread->thread_state() == _thread_in_native || in_java) && UnsafeCopyMemory::contains_pc(pc);
-      if (((thread->thread_state() == _thread_in_vm ||
-           thread->thread_state() == _thread_in_native ||
-           is_unsafe_arraycopy) &&
-          thread->doing_unsafe_access()) ||
+      bool is_unsafe_arraycopy = (in_native || in_java) && UnsafeCopyMemory::contains_pc(pc);
+      if (((in_vm || in_native || is_unsafe_arraycopy) && thread->doing_unsafe_access()) ||
           (nm != NULL && nm->has_unsafe_access())) {
         address next_pc =  Assembler::locate_next_instruction(pc);
         if (is_unsafe_arraycopy) {
@@ -2604,6 +2666,19 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
         return Handle_Exception(exceptionInfo, SharedRuntime::handle_unsafe_access(thread, next_pc));
       }
     }
+
+#ifdef _M_ARM64
+    if (in_java &&
+        (exception_code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+          exception_code == EXCEPTION_ILLEGAL_INSTRUCTION_2)) {
+      if (nativeInstruction_at(pc)->is_sigill_zombie_not_entrant()) {
+        if (TraceTraps) {
+          tty->print_cr("trap: zombie_not_entrant");
+        }
+        return Handle_Exception(exceptionInfo, SharedRuntime::get_handle_wrong_method_stub());
+      }
+    }
+#endif
 
     if (in_java) {
       switch (exception_code) {
@@ -2615,20 +2690,74 @@ LONG WINAPI topLevelExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
 
       } // switch
     }
-    if (((thread->thread_state() == _thread_in_Java) ||
-         (thread->thread_state() == _thread_in_native)) &&
-         exception_code != EXCEPTION_UNCAUGHT_CXX_EXCEPTION) {
+
+#if defined(_M_AMD64) || defined(_M_IX86)
+    if ((in_java || in_native) && exception_code != EXCEPTION_UNCAUGHT_CXX_EXCEPTION) {
       LONG result=Handle_FLT_Exception(exceptionInfo);
       if (result==EXCEPTION_CONTINUE_EXECUTION) return result;
     }
+#endif
   }
+
+#if !defined(USE_VECTORED_EXCEPTION_HANDLING)
+  if (exception_code != EXCEPTION_BREAKPOINT) {
+    report_error(t, exception_code, pc, exception_record,
+                 exceptionInfo->ContextRecord);
+  }
+#endif
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+#if defined(USE_VECTORED_EXCEPTION_HANDLING) || INCLUDE_AOT
+LONG WINAPI topLevelVectoredExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
+  PEXCEPTION_RECORD exceptionRecord = exceptionInfo->ExceptionRecord;
+#if defined(_M_ARM64)
+  address pc = (address) exceptionInfo->ContextRecord->Pc;
+#elif defined(_M_AMD64)
+  address pc = (address) exceptionInfo->ContextRecord->Rip;
+#else
+  address pc = (address) exceptionInfo->ContextRecord->Eip;
+#endif
+
+  // Fast path for code part of the code cache
+  if (CodeCache::low_bound() <= pc && pc < CodeCache::high_bound()) {
+    return topLevelExceptionFilter(exceptionInfo);
+  }
+
+  // Handle the case where we get an implicit exception in AOT generated
+  // code.  AOT DLL's loaded are not registered for structured exceptions.
+  // If the exception occurred in the codeCache or AOT code, pass control
+  // to our normal exception handler.
+  CodeBlob* cb = CodeCache::find_blob(pc);
+  if (cb != NULL) {
+    return topLevelExceptionFilter(exceptionInfo);
+  }
+
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
+#if defined(USE_VECTORED_EXCEPTION_HANDLING)
+LONG WINAPI topLevelUnhandledExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo) {
+  if (InterceptOSException) goto exit;
+  DWORD exception_code = exceptionInfo->ExceptionRecord->ExceptionCode;
+#if defined(_M_ARM64)
+  address pc = (address)exceptionInfo->ContextRecord->Pc;
+#elif defined(_M_AMD64)
+  address pc = (address) exceptionInfo->ContextRecord->Rip;
+#else
+  address pc = (address) exceptionInfo->ContextRecord->Eip;
+#endif
+  Thread* t = Thread::current_or_null_safe();
 
   if (exception_code != EXCEPTION_BREAKPOINT) {
     report_error(t, exception_code, pc, exceptionInfo->ExceptionRecord,
-                 exceptionInfo->ContextRecord);
+                exceptionInfo->ContextRecord);
   }
-  return EXCEPTION_CONTINUE_SEARCH;
+exit:
+  return previousUnhandledExceptionFilter ? previousUnhandledExceptionFilter(exceptionInfo) : EXCEPTION_CONTINUE_SEARCH;
 }
+#endif
 
 #ifndef _WIN64
 // Special care for fast JNI accessors.
@@ -2716,9 +2845,6 @@ int os::vm_allocation_granularity() {
   #define MEM_LARGE_PAGES 0x20000000
 #endif
 
-static HANDLE    _hProcess;
-static HANDLE    _hToken;
-
 // Container for NUMA node list info
 class NUMANodeListHolder {
  private:
@@ -2766,17 +2892,17 @@ class NUMANodeListHolder {
 
 } numa_node_list_holder;
 
-
-
 static size_t _large_page_size = 0;
 
 static bool request_lock_memory_privilege() {
-  _hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE,
-                          os::current_process_id());
+  HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE,
+                                os::current_process_id());
 
+  bool success = false;
+  HANDLE hToken = NULL;
   LUID luid;
-  if (_hProcess != NULL &&
-      OpenProcessToken(_hProcess, TOKEN_ADJUST_PRIVILEGES, &_hToken) &&
+  if (hProcess != NULL &&
+      OpenProcessToken(hProcess, TOKEN_ADJUST_PRIVILEGES, &hToken) &&
       LookupPrivilegeValue(NULL, "SeLockMemoryPrivilege", &luid)) {
 
     TOKEN_PRIVILEGES tp;
@@ -2786,51 +2912,52 @@ static bool request_lock_memory_privilege() {
 
     // AdjustTokenPrivileges() may return TRUE even when it couldn't change the
     // privilege. Check GetLastError() too. See MSDN document.
-    if (AdjustTokenPrivileges(_hToken, false, &tp, sizeof(tp), NULL, NULL) &&
+    if (AdjustTokenPrivileges(hToken, false, &tp, sizeof(tp), NULL, NULL) &&
         (GetLastError() == ERROR_SUCCESS)) {
-      return true;
+      success = true;
     }
   }
 
-  return false;
-}
+  // Cleanup
+  if (hProcess != NULL) {
+    CloseHandle(hProcess);
+  }
+  if (hToken != NULL) {
+    CloseHandle(hToken);
+  }
 
-static void cleanup_after_large_page_init() {
-  if (_hProcess) CloseHandle(_hProcess);
-  _hProcess = NULL;
-  if (_hToken) CloseHandle(_hToken);
-  _hToken = NULL;
+  return success;
 }
 
 static bool numa_interleaving_init() {
   bool success = false;
-  bool use_numa_interleaving_specified = !FLAG_IS_DEFAULT(UseNUMAInterleaving);
 
   // print a warning if UseNUMAInterleaving flag is specified on command line
-  bool warn_on_failure = use_numa_interleaving_specified;
+  bool warn_on_failure = !FLAG_IS_DEFAULT(UseNUMAInterleaving);
+
 #define WARN(msg) if (warn_on_failure) { warning(msg); }
 
   // NUMAInterleaveGranularity cannot be less than vm_allocation_granularity (or _large_page_size if using large pages)
   size_t min_interleave_granularity = UseLargePages ? _large_page_size : os::vm_allocation_granularity();
   NUMAInterleaveGranularity = align_up(NUMAInterleaveGranularity, min_interleave_granularity);
 
-  if (numa_node_list_holder.build()) {
-    if (log_is_enabled(Debug, os, cpu)) {
-      Log(os, cpu) log;
-      log.debug("NUMA UsedNodeCount=%d, namely ", numa_node_list_holder.get_count());
-      for (int i = 0; i < numa_node_list_holder.get_count(); i++) {
-        log.debug("  %d ", numa_node_list_holder.get_node_list_entry(i));
-      }
-    }
-    success = true;
-  } else {
+  if (!numa_node_list_holder.build()) {
     WARN("Process does not cover multiple NUMA nodes.");
+    WARN("...Ignoring UseNUMAInterleaving flag.");
+    return false;
   }
-  if (!success) {
-    if (use_numa_interleaving_specified) WARN("...Ignoring UseNUMAInterleaving flag.");
+
+  if (log_is_enabled(Debug, os, cpu)) {
+    Log(os, cpu) log;
+    log.debug("NUMA UsedNodeCount=%d, namely ", numa_node_list_holder.get_count());
+    for (int i = 0; i < numa_node_list_holder.get_count(); i++) {
+      log.debug("  %d ", numa_node_list_holder.get_node_list_entry(i));
+    }
   }
-  return success;
+
 #undef WARN
+
+  return true;
 }
 
 // this routine is used whenever we need to reserve a contiguous VA range
@@ -2857,7 +2984,7 @@ static char* allocate_pages_individually(size_t bytes, char* addr, DWORD flags,
     // Overflowed.
     return NULL;
   }
-  p_buf = (char *) VirtualAlloc(addr,
+  p_buf = (char *) virtualAlloc(addr,
                                 size_of_reserve,  // size of Reserve
                                 MEM_RESERVE,
                                 PAGE_READWRITE);
@@ -2903,7 +3030,7 @@ static char* allocate_pages_individually(size_t bytes, char* addr, DWORD flags,
       p_new = NULL;
     } else {
       if (!UseNUMAInterleaving) {
-        p_new = (char *) VirtualAlloc(next_alloc_addr,
+        p_new = (char *) virtualAlloc(next_alloc_addr,
                                       bytes_to_rq,
                                       flags,
                                       prot);
@@ -2911,7 +3038,7 @@ static char* allocate_pages_individually(size_t bytes, char* addr, DWORD flags,
         // get the next node to use from the used_node_list
         assert(numa_node_list_holder.get_count() > 0, "Multiple NUMA nodes expected");
         DWORD node = numa_node_list_holder.get_node_list_entry(count % numa_node_list_holder.get_count());
-        p_new = (char *)VirtualAllocExNuma(hProc, next_alloc_addr, bytes_to_rq, flags, prot, node);
+        p_new = (char *)virtualAllocExNuma(hProc, next_alloc_addr, bytes_to_rq, flags, prot, node);
       }
     }
 
@@ -2951,51 +3078,55 @@ static char* allocate_pages_individually(size_t bytes, char* addr, DWORD flags,
   return p_buf;
 }
 
-
-
-void os::large_page_init() {
-  if (!UseLargePages) return;
-
+static size_t large_page_init_decide_size() {
   // print a warning if any large page related flag is specified on command line
   bool warn_on_failure = !FLAG_IS_DEFAULT(UseLargePages) ||
                          !FLAG_IS_DEFAULT(LargePageSizeInBytes);
-  bool success = false;
 
 #define WARN(msg) if (warn_on_failure) { warning(msg); }
-  if (request_lock_memory_privilege()) {
-    size_t s = GetLargePageMinimum();
-    if (s) {
-#if defined(IA32) || defined(AMD64)
-      if (s > 4*M || LargePageSizeInBytes > 4*M) {
-        WARN("JVM cannot use large pages bigger than 4mb.");
-      } else {
-#endif
-        if (LargePageSizeInBytes && LargePageSizeInBytes % s == 0) {
-          _large_page_size = LargePageSizeInBytes;
-        } else {
-          _large_page_size = s;
-        }
-        success = true;
-#if defined(IA32) || defined(AMD64)
-      }
-#endif
-    } else {
-      WARN("Large page is not supported by the processor.");
-    }
-  } else {
+
+  if (!request_lock_memory_privilege()) {
     WARN("JVM cannot use large page memory because it does not have enough privilege to lock pages in memory.");
+    return 0;
   }
+
+  size_t size = GetLargePageMinimum();
+  if (size == 0) {
+    WARN("Large page is not supported by the processor.");
+    return 0;
+  }
+
+#if defined(IA32) || defined(AMD64)
+  if (size > 4*M || LargePageSizeInBytes > 4*M) {
+    WARN("JVM cannot use large pages bigger than 4mb.");
+    return 0;
+  }
+#endif
+
+  if (LargePageSizeInBytes > 0 && LargePageSizeInBytes % size == 0) {
+    size = LargePageSizeInBytes;
+  }
+
 #undef WARN
 
+  return size;
+}
+
+void os::large_page_init() {
+  if (!UseLargePages) {
+    return;
+  }
+
+  _large_page_size = large_page_init_decide_size();
+
   const size_t default_page_size = (size_t) vm_page_size();
-  if (success && _large_page_size > default_page_size) {
+  if (_large_page_size > default_page_size) {
     _page_sizes[0] = _large_page_size;
     _page_sizes[1] = default_page_size;
     _page_sizes[2] = 0;
   }
 
-  cleanup_after_large_page_init();
-  UseLargePages = success;
+  UseLargePages = _large_page_size != 0;
 }
 
 int os::create_file_for_heap(const char* dir) {
@@ -3053,7 +3184,7 @@ char* os::map_memory_to_file(char* base, size_t size, int fd) {
     return NULL;
   }
 
-  LPVOID addr = MapViewOfFileEx(fileMapping, FILE_MAP_WRITE, 0, 0, size, base);
+  LPVOID addr = mapViewOfFileEx(fileMapping, FILE_MAP_WRITE, 0, 0, size, base);
 
   CloseHandle(fileMapping);
 
@@ -3071,23 +3202,35 @@ char* os::replace_existing_mapping_with_file_mapping(char* base, size_t size, in
 // On win32, one cannot release just a part of reserved memory, it's an
 // all or nothing deal.  When we split a reservation, we must break the
 // reservation into two reservations.
-void os::pd_split_reserved_memory(char *base, size_t size, size_t split,
-                                  bool realloc) {
-  if (size > 0) {
-    release_memory(base, size);
-    if (realloc) {
-      reserve_memory(split, base);
-    }
-    if (size != split) {
-      reserve_memory(size - split, base + split);
-    }
+void os::split_reserved_memory(char *base, size_t size, size_t split) {
+
+  char* const split_address = base + split;
+  assert(size > 0, "Sanity");
+  assert(size > split, "Sanity");
+  assert(split > 0, "Sanity");
+  assert(is_aligned(base, os::vm_allocation_granularity()), "Sanity");
+  assert(is_aligned(split_address, os::vm_allocation_granularity()), "Sanity");
+
+  const bool rc = release_memory(base, size) &&
+                  (attempt_reserve_memory_at(base, split) != NULL) &&
+                  (attempt_reserve_memory_at(split_address, size - split) != NULL);
+  if (!rc) {
+    log_warning(os)("os::split_reserved_memory failed for " RANGE_FORMAT,
+                    RANGE_FORMAT_ARGS(base, size));
+    os::print_memory_mappings(base, size, tty);
+    assert(false, "os::split_reserved_memory failed for " RANGE_FORMAT,
+                    RANGE_FORMAT_ARGS(base, size));
   }
+
+  // NMT: nothing to do here. Since Windows implements the split by
+  //  releasing and re-reserving memory, the parts are already registered
+  //  as individual mappings with NMT.
 }
 
 // Multiple threads can race in this code but it's not possible to unmap small sections of
 // virtual space to get requested alignment, like posix-like os's.
 // Windows prevents multiple thread from remapping over each other so this loop is thread-safe.
-char* os::reserve_memory_aligned(size_t size, size_t alignment, int file_desc) {
+static char* map_or_reserve_memory_aligned(size_t size, size_t alignment, int file_desc) {
   assert((alignment & (os::vm_allocation_granularity() - 1)) == 0,
          "Alignment must be a multiple of allocation granularity (page size)");
   assert((size & (alignment -1)) == 0, "size must be 'alignment' aligned");
@@ -3096,29 +3239,50 @@ char* os::reserve_memory_aligned(size_t size, size_t alignment, int file_desc) {
   assert(extra_size >= size, "overflow, size is too large to allow alignment");
 
   char* aligned_base = NULL;
+  static const int max_attempts = 20;
 
-  do {
-    char* extra_base = os::reserve_memory(extra_size, NULL, alignment, file_desc);
+  for (int attempt = 0; attempt < max_attempts && aligned_base == NULL; attempt ++) {
+    char* extra_base = file_desc != -1 ? os::map_memory_to_file(extra_size, file_desc) :
+                                         os::reserve_memory(extra_size);
     if (extra_base == NULL) {
       return NULL;
     }
     // Do manual alignment
     aligned_base = align_up(extra_base, alignment);
 
-    if (file_desc != -1) {
-      os::unmap_memory(extra_base, extra_size);
-    } else {
-      os::release_memory(extra_base, extra_size);
+    bool rc = (file_desc != -1) ? os::unmap_memory(extra_base, extra_size) :
+                                  os::release_memory(extra_base, extra_size);
+    assert(rc, "release failed");
+    if (!rc) {
+      return NULL;
     }
 
-    aligned_base = os::reserve_memory(size, aligned_base, 0, file_desc);
+    // Attempt to map, into the just vacated space, the slightly smaller aligned area.
+    // Which may fail, hence the loop.
+    aligned_base = file_desc != -1 ? os::attempt_map_memory_to_file_at(aligned_base, size, file_desc) :
+                                     os::attempt_reserve_memory_at(aligned_base, size);
+  }
 
-  } while (aligned_base == NULL);
+  assert(aligned_base != NULL, "Did not manage to re-map after %d attempts?", max_attempts);
 
   return aligned_base;
 }
 
-char* os::pd_reserve_memory(size_t bytes, char* addr, size_t alignment_hint) {
+char* os::reserve_memory_aligned(size_t size, size_t alignment) {
+  return map_or_reserve_memory_aligned(size, alignment, -1 /* file_desc */);
+}
+
+char* os::map_memory_to_file_aligned(size_t size, size_t alignment, int fd) {
+  return map_or_reserve_memory_aligned(size, alignment, fd);
+}
+
+char* os::pd_reserve_memory(size_t bytes) {
+  return pd_attempt_reserve_memory_at(NULL /* addr */, bytes);
+}
+
+// Reserve memory at an arbitrary address, only if that area is
+// available (and not reserved for something else).
+char* os::pd_attempt_reserve_memory_at(char* addr, size_t bytes) {
   assert((size_t)addr % os::vm_allocation_granularity() == 0,
          "reserve alignment");
   assert(bytes % os::vm_page_size() == 0, "reserve page size");
@@ -3127,7 +3291,7 @@ char* os::pd_reserve_memory(size_t bytes, char* addr, size_t alignment_hint) {
   // will go thru reserve_memory_special rather than thru here.
   bool use_individual = (UseNUMAInterleaving && !UseLargePages);
   if (!use_individual) {
-    res = (char*)VirtualAlloc(addr, bytes, MEM_RESERVE, PAGE_READWRITE);
+    res = (char*)virtualAlloc(addr, bytes, MEM_RESERVE, PAGE_READWRITE);
   } else {
     elapsedTimer reserveTimer;
     if (Verbose && PrintMiscellaneous) reserveTimer.start();
@@ -3149,15 +3313,7 @@ char* os::pd_reserve_memory(size_t bytes, char* addr, size_t alignment_hint) {
   return res;
 }
 
-// Reserve memory at an arbitrary address, only if that area is
-// available (and not reserved for something else).
-char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr) {
-  // Windows os::reserve_memory() fails of the requested address range is
-  // not avilable.
-  return reserve_memory(bytes, requested_addr);
-}
-
-char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr, int file_desc) {
+char* os::pd_attempt_map_memory_to_file_at(char* requested_addr, size_t bytes, int file_desc) {
   assert(file_desc >= 0, "file_desc is not valid");
   return map_memory_to_file(requested_addr, bytes, file_desc);
 }
@@ -3214,7 +3370,7 @@ char* os::pd_reserve_memory_special(size_t bytes, size_t alignment, char* addr,
 
     // normal policy just allocate it all at once
     DWORD flag = MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES;
-    char * res = (char *)VirtualAlloc(addr, bytes, flag, prot);
+    char * res = (char *)virtualAlloc(addr, bytes, flag, prot);
 
     return res;
   }
@@ -3251,7 +3407,7 @@ bool os::pd_commit_memory(char* addr, size_t bytes, bool exec) {
   // is always within a reserve covered by a single VirtualAlloc
   // in that case we can just do a single commit for the requested size
   if (!UseNUMAInterleaving) {
-    if (VirtualAlloc(addr, bytes, MEM_COMMIT, PAGE_READWRITE) == NULL) {
+    if (virtualAlloc(addr, bytes, MEM_COMMIT, PAGE_READWRITE) == NULL) {
       NOT_PRODUCT(warn_fail_commit_memory(addr, bytes, exec);)
       return false;
     }
@@ -3276,7 +3432,7 @@ bool os::pd_commit_memory(char* addr, size_t bytes, bool exec) {
       MEMORY_BASIC_INFORMATION alloc_info;
       VirtualQuery(next_alloc_addr, &alloc_info, sizeof(alloc_info));
       size_t bytes_to_rq = MIN2(bytes_remaining, (size_t)alloc_info.RegionSize);
-      if (VirtualAlloc(next_alloc_addr, bytes_to_rq, MEM_COMMIT,
+      if (virtualAlloc(next_alloc_addr, bytes_to_rq, MEM_COMMIT,
                        PAGE_READWRITE) == NULL) {
         NOT_PRODUCT(warn_fail_commit_memory(next_alloc_addr, bytes_to_rq,
                                             exec);)
@@ -3328,11 +3484,61 @@ bool os::pd_uncommit_memory(char* addr, size_t bytes) {
   }
   assert((size_t) addr % os::vm_page_size() == 0, "uncommit on page boundaries");
   assert(bytes % os::vm_page_size() == 0, "uncommit in page-sized chunks");
-  return (VirtualFree(addr, bytes, MEM_DECOMMIT) != 0);
+  return (virtualFree(addr, bytes, MEM_DECOMMIT) == TRUE);
 }
 
 bool os::pd_release_memory(char* addr, size_t bytes) {
-  return VirtualFree(addr, 0, MEM_RELEASE) != 0;
+  // Given a range we are to release, we require a mapping to start at the beginning of that range;
+  //  if NUMA or LP we allow the range to contain multiple mappings, which have to cover the range
+  //  completely; otherwise the range must match an OS mapping exactly.
+  address start = (address)addr;
+  address end = start + bytes;
+  os::win32::mapping_info_t mi;
+  const bool multiple_mappings_allowed = UseLargePagesIndividualAllocation || UseNUMAInterleaving;
+  address p = start;
+  bool first_mapping = true;
+
+  do {
+    // Find mapping and check it
+    const char* err = NULL;
+    if (!os::win32::find_mapping(p, &mi)) {
+      err = "no mapping found";
+    } else {
+      if (first_mapping) {
+        if (mi.base != start) {
+          err = "base address mismatch";
+        }
+        if (multiple_mappings_allowed ? (mi.size > bytes) : (mi.size != bytes)) {
+          err = "size mismatch";
+        }
+      } else {
+        assert(p == mi.base && mi.size > 0, "Sanity");
+        if (mi.base + mi.size > end) {
+          err = "mapping overlaps end";
+        }
+        if (mi.size == 0) {
+          err = "zero length mapping?"; // Should never happen; just to prevent endlessly looping in release.
+        }
+      }
+    }
+    // Handle mapping error. We assert in debug, unconditionally print a warning in release.
+    if (err != NULL) {
+      log_warning(os)("bad release: [" PTR_FORMAT "-" PTR_FORMAT "): %s", p2i(start), p2i(end), err);
+#ifdef ASSERT
+      os::print_memory_mappings((char*)start, bytes, tty);
+      assert(false, "bad release: [" PTR_FORMAT "-" PTR_FORMAT "): %s", p2i(start), p2i(end), err);
+#endif
+      return false;
+    }
+    // Free this range
+    if (virtualFree(p, 0, MEM_RELEASE) == FALSE) {
+      return false;
+    }
+    first_mapping = false;
+    p = mi.base + mi.size;
+  } while (p < end);
+
+  return true;
 }
 
 bool os::pd_create_stack_guard_pages(char* addr, size_t size) {
@@ -3469,7 +3675,12 @@ char* os::non_memory_address_word() {
   // Must never look like an address returned by reserve_memory,
   // even in its subfields (as defined by the CPU immediate fields,
   // if the CPU splits constants across multiple instructions).
+#ifdef _M_ARM64
+  // AArch64 has a maximum addressable space of 48-bits
+  return (char*)((1ull << 48) - 1);
+#else
   return (char*)-1;
+#endif
 }
 
 #define MAX_ERROR_COUNT 100
@@ -3954,8 +4165,6 @@ void nx_check_protection() {
 void os::init(void) {
   _initial_pid = _getpid();
 
-  init_random(1234567);
-
   win32::initialize_system_info();
   win32::setmode_streams();
   init_page_sizes((size_t) win32::vm_page_size());
@@ -3993,7 +4202,10 @@ jint os::init_2(void) {
 
   // Setup Windows Exceptions
 
-#if INCLUDE_AOT
+#if defined(USE_VECTORED_EXCEPTION_HANDLING)
+  topLevelVectoredExceptionHandler = AddVectoredExceptionHandler(1, topLevelVectoredExceptionFilter);
+  previousUnhandledExceptionFilter = SetUnhandledExceptionFilter(topLevelUnhandledExceptionFilter);
+#elif INCLUDE_AOT
   // If AOT is enabled we need to install a vectored exception handler
   // in order to forward implicit exceptions from code in AOT
   // generated DLLs.  This is necessary since these DLLs are not
@@ -4036,8 +4248,8 @@ jint os::init_2(void) {
   // Add in 4*BytesPerWord 4K pages to account for VM stack during
   // class initialization depending on 32 or 64 bit VM.
   size_t min_stack_allowed =
-            (size_t)(JavaThread::stack_guard_zone_size() +
-                     JavaThread::stack_shadow_zone_size() +
+            (size_t)(StackOverflow::stack_guard_zone_size() +
+                     StackOverflow::stack_shadow_zone_size() +
                      (4*BytesPerWord COMPILER2_PRESENT(+2)) * 4 * K);
 
   min_stack_allowed = align_up(min_stack_allowed, os::vm_page_size());
@@ -4092,9 +4304,7 @@ jint os::init_2(void) {
   // initialize thread priority policy
   prio_init();
 
-  if (UseNUMA && !ForceNUMA) {
-    UseNUMA = false; // We don't fully support this yet
-  }
+  UseNUMA = false; // We don't fully support this yet
 
   if (UseNUMAInterleaving || (UseNUMA && FLAG_IS_DEFAULT(UseNUMAInterleaving))) {
     if (!numa_interleaving_init()) {
@@ -4841,15 +5051,25 @@ static int stdinAvailable(int fd, long *pbytes) {
 char* os::pd_map_memory(int fd, const char* file_name, size_t file_offset,
                         char *addr, size_t bytes, bool read_only,
                         bool allow_exec) {
+
+  errno_t err;
+  wchar_t* wide_path = wide_abs_unc_path(file_name, err);
+
+  if (wide_path == NULL) {
+    return NULL;
+  }
+
   HANDLE hFile;
   char* base;
 
-  hFile = CreateFile(file_name, GENERIC_READ, FILE_SHARE_READ, NULL,
+  hFile = CreateFileW(wide_path, GENERIC_READ, FILE_SHARE_READ, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-  if (hFile == NULL) {
-    log_info(os)("CreateFile() failed: GetLastError->%ld.", GetLastError());
+  if (hFile == INVALID_HANDLE_VALUE) {
+    log_info(os)("CreateFileW() failed: GetLastError->%ld.", GetLastError());
+    os::free(wide_path);
     return NULL;
   }
+  os::free(wide_path);
 
   if (allow_exec) {
     // CreateFileMapping/MapViewOfFileEx can't map executable memory
@@ -4862,10 +5082,9 @@ char* os::pd_map_memory(int fd, const char* file_name, size_t file_offset,
     // we might consider DLLizing the shared archive with a proper PE
     // header so that mapping executable + sharing is possible.
 
-    base = (char*) VirtualAlloc(addr, bytes, MEM_COMMIT | MEM_RESERVE,
+    base = (char*) virtualAlloc(addr, bytes, MEM_COMMIT | MEM_RESERVE,
                                 PAGE_READWRITE);
     if (base == NULL) {
-      log_info(os)("VirtualAlloc() failed: GetLastError->%ld.", GetLastError());
       CloseHandle(hFile);
       return NULL;
     }
@@ -4897,10 +5116,9 @@ char* os::pd_map_memory(int fd, const char* file_name, size_t file_offset,
     }
 
     DWORD access = read_only ? FILE_MAP_READ : FILE_MAP_COPY;
-    base = (char*)MapViewOfFileEx(hMap, access, 0, (DWORD)file_offset,
+    base = (char*)mapViewOfFileEx(hMap, access, 0, (DWORD)file_offset,
                                   (DWORD)bytes, addr);
     if (base == NULL) {
-      log_info(os)("MapViewOfFileEx() failed: GetLastError->%ld.", GetLastError());
       CloseHandle(hMap);
       CloseHandle(hFile);
       return NULL;
@@ -4972,9 +5190,8 @@ bool os::pd_unmap_memory(char* addr, size_t bytes) {
     return pd_release_memory(addr, bytes);
   }
 
-  BOOL result = UnmapViewOfFile(addr);
+  BOOL result = unmapViewOfFile(addr);
   if (result == 0) {
-    log_info(os)("UnmapViewOfFile() failed: GetLastError->%ld.", GetLastError());
     return false;
   }
   return true;
@@ -5003,9 +5220,10 @@ void os::pause() {
 
 Thread* os::ThreadCrashProtection::_protected_thread = NULL;
 os::ThreadCrashProtection* os::ThreadCrashProtection::_crash_protection = NULL;
-volatile intptr_t os::ThreadCrashProtection::_crash_mux = 0;
 
 os::ThreadCrashProtection::ThreadCrashProtection() {
+  _protected_thread = Thread::current();
+  assert(_protected_thread->is_JfrSampler_thread(), "should be JFRSampler");
 }
 
 // See the caveats for this class in os_windows.hpp
@@ -5015,12 +5233,6 @@ os::ThreadCrashProtection::ThreadCrashProtection() {
 // The callback is supposed to provide the method that should be protected.
 //
 bool os::ThreadCrashProtection::call(os::CrashProtectionCallback& cb) {
-
-  Thread::muxAcquire(&_crash_mux, "CrashProtection");
-
-  _protected_thread = Thread::current_or_null();
-  assert(_protected_thread != NULL, "Cannot crash protect a NULL thread");
-
   bool success = true;
   __try {
     _crash_protection = this;
@@ -5031,7 +5243,6 @@ bool os::ThreadCrashProtection::call(os::CrashProtectionCallback& cb) {
   }
   _crash_protection = NULL;
   _protected_thread = NULL;
-  Thread::muxRelease(&_crash_mux);
   return success;
 }
 
@@ -5452,7 +5663,7 @@ int os::raw_send(int fd, char* buf, size_t nBytes, uint flags) {
 // WINDOWS CONTEXT Flags for THREAD_SAMPLING
 #if defined(IA32)
   #define sampling_context_flags (CONTEXT_FULL | CONTEXT_FLOATING_POINT | CONTEXT_EXTENDED_REGISTERS)
-#elif defined (AMD64)
+#elif defined(AMD64) || defined(_M_ARM64)
   #define sampling_context_flags (CONTEXT_FULL | CONTEXT_FLOATING_POINT)
 #endif
 
@@ -5710,4 +5921,232 @@ void os::win32::initialize_thread_ptr_offset() {
 
 bool os::supports_map_sync() {
   return false;
+}
+
+#ifdef ASSERT
+static void check_meminfo(MEMORY_BASIC_INFORMATION* minfo) {
+  assert(minfo->State == MEM_FREE || minfo->State == MEM_COMMIT || minfo->State == MEM_RESERVE, "Invalid state");
+  if (minfo->State != MEM_FREE) {
+    assert(minfo->AllocationBase != NULL && minfo->BaseAddress >= minfo->AllocationBase, "Invalid pointers");
+    assert(minfo->RegionSize > 0, "Invalid region size");
+  }
+}
+#endif
+
+
+static bool checkedVirtualQuery(address addr, MEMORY_BASIC_INFORMATION* minfo) {
+  ZeroMemory(minfo, sizeof(MEMORY_BASIC_INFORMATION));
+  if (::VirtualQuery(addr, minfo, sizeof(MEMORY_BASIC_INFORMATION)) == sizeof(MEMORY_BASIC_INFORMATION)) {
+    DEBUG_ONLY(check_meminfo(minfo);)
+    return true;
+  }
+  return false;
+}
+
+// Given a pointer pointing into an allocation (an area allocated with VirtualAlloc),
+//  return information about that allocation.
+bool os::win32::find_mapping(address addr, mapping_info_t* mi) {
+  // Query at addr to find allocation base; then, starting at allocation base,
+  //  query all regions, until we either find the next allocation or a free area.
+  ZeroMemory(mi, sizeof(mapping_info_t));
+  MEMORY_BASIC_INFORMATION minfo;
+  address allocation_base = NULL;
+  address allocation_end = NULL;
+  bool rc = false;
+  if (checkedVirtualQuery(addr, &minfo)) {
+    if (minfo.State != MEM_FREE) {
+      allocation_base = (address)minfo.AllocationBase;
+      allocation_end = allocation_base;
+      // Iterate through all regions in this allocation to find its end. While we are here, also count things.
+      for (;;) {
+        bool rc = checkedVirtualQuery(allocation_end, &minfo);
+        if (rc == false ||                                       // VirtualQuery error, end of allocation?
+           minfo.State == MEM_FREE ||                            // end of allocation, free memory follows
+           (address)minfo.AllocationBase != allocation_base)     // end of allocation, a new one starts
+        {
+          break;
+        }
+        const size_t region_size = minfo.RegionSize;
+        mi->regions ++;
+        if (minfo.State == MEM_COMMIT) {
+          mi->committed_size += minfo.RegionSize;
+        }
+        allocation_end += region_size;
+      }
+      if (allocation_base != NULL && allocation_end > allocation_base) {
+        mi->base = allocation_base;
+        mi->size = allocation_end - allocation_base;
+        rc = true;
+      }
+    }
+  }
+#ifdef ASSERT
+  if (rc) {
+    assert(mi->size > 0 && mi->size >= mi->committed_size, "Sanity");
+    assert(addr >= mi->base && addr < mi->base + mi->size, "Sanity");
+    assert(mi->regions > 0, "Sanity");
+  }
+#endif
+  return rc;
+}
+
+// Helper for print_one_mapping: print n words, both as hex and ascii.
+// Use Safefetch for all values.
+static void print_snippet(const void* p, outputStream* st) {
+  static const int num_words = LP64_ONLY(3) NOT_LP64(6);
+  static const int num_bytes = num_words * sizeof(int);
+  intptr_t v[num_words];
+  const int errval = 0xDE210244;
+  for (int i = 0; i < num_words; i++) {
+    v[i] = SafeFetchN((intptr_t*)p + i, errval);
+    if (v[i] == errval &&
+        SafeFetchN((intptr_t*)p + i, ~errval) == ~errval) {
+      return;
+    }
+  }
+  st->put('[');
+  for (int i = 0; i < num_words; i++) {
+    st->print(INTPTR_FORMAT " ", v[i]);
+  }
+  const char* b = (char*)v;
+  st->put('\"');
+  for (int i = 0; i < num_bytes; i++) {
+    st->put(::isgraph(b[i]) ? b[i] : '.');
+  }
+  st->put('\"');
+  st->put(']');
+}
+
+// Helper function for print_memory_mappings:
+//  Given a MEMORY_BASIC_INFORMATION, containing information about a non-free region:
+//  print out all regions in that allocation. If any of those regions
+//  fall outside the given range [start, end), indicate that in the output.
+// Return the pointer to the end of the allocation.
+static address print_one_mapping(MEMORY_BASIC_INFORMATION* minfo, address start, address end, outputStream* st) {
+  // Print it like this:
+  //
+  // Base: <xxxxx>: [xxxx - xxxx], state=MEM_xxx, prot=x, type=MEM_xxx       (region 1)
+  //                [xxxx - xxxx], state=MEM_xxx, prot=x, type=MEM_xxx       (region 2)
+  assert(minfo->State != MEM_FREE, "Not inside an allocation.");
+  address allocation_base = (address)minfo->AllocationBase;
+  #define IS_IN(p) (p >= start && p < end)
+  bool first_line = true;
+  bool is_dll = false;
+  for(;;) {
+    if (first_line) {
+      st->print("Base " PTR_FORMAT ": ", p2i(allocation_base));
+    } else {
+      st->print_raw(NOT_LP64 ("                 ")
+                    LP64_ONLY("                         "));
+    }
+    address region_start = (address)minfo->BaseAddress;
+    address region_end = region_start + minfo->RegionSize;
+    assert(region_end > region_start, "Sanity");
+    if (region_end <= start) {
+      st->print("<outside range> ");
+    } else if (region_start >= end) {
+      st->print("<outside range> ");
+    } else if (!IS_IN(region_start) || !IS_IN(region_end - 1)) {
+      st->print("<partly outside range> ");
+    }
+    st->print("[" PTR_FORMAT "-" PTR_FORMAT "), state=", p2i(region_start), p2i(region_end));
+    switch (minfo->State) {
+      case MEM_COMMIT:  st->print_raw("MEM_COMMIT "); break;
+      case MEM_FREE:    st->print_raw("MEM_FREE   "); break;
+      case MEM_RESERVE: st->print_raw("MEM_RESERVE"); break;
+      default: st->print("%x?", (unsigned)minfo->State);
+    }
+    st->print(", prot=%3x, type=", (unsigned)minfo->Protect);
+    switch (minfo->Type) {
+      case MEM_IMAGE:   st->print_raw("MEM_IMAGE  "); break;
+      case MEM_MAPPED:  st->print_raw("MEM_MAPPED "); break;
+      case MEM_PRIVATE: st->print_raw("MEM_PRIVATE"); break;
+      default: st->print("%x?", (unsigned)minfo->State);
+    }
+    // At the start of every allocation, print some more information about this mapping.
+    // Notes:
+    //  - this could be beefed up a lot, similar to os::print_location
+    //  - for now we just query the allocation start point. This may be confusing for cases where
+    //    the kernel merges multiple mappings.
+    if (first_line) {
+      char buf[MAX_PATH];
+      if (os::dll_address_to_library_name(allocation_base, buf, sizeof(buf), nullptr)) {
+        st->print(", %s", buf);
+        is_dll = true;
+      }
+    }
+    // If memory is accessible, and we do not know anything else about it, print a snippet
+    if (!is_dll &&
+        minfo->State == MEM_COMMIT &&
+        !(minfo->Protect & PAGE_NOACCESS || minfo->Protect & PAGE_GUARD)) {
+      st->print_raw(", ");
+      print_snippet(region_start, st);
+    }
+    st->cr();
+    // Next region...
+    bool rc = checkedVirtualQuery(region_end, minfo);
+    if (rc == false ||                                         // VirtualQuery error, end of allocation?
+       (minfo->State == MEM_FREE) ||                           // end of allocation, free memory follows
+       ((address)minfo->AllocationBase != allocation_base) ||  // end of allocation, a new one starts
+       (region_end > end))                                     // end of range to print.
+    {
+      return region_end;
+    }
+    first_line = false;
+  }
+  #undef IS_IN
+  ShouldNotReachHere();
+  return NULL;
+}
+
+void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
+  MEMORY_BASIC_INFORMATION minfo;
+  address start = (address)addr;
+  address end = start + bytes;
+  address p = start;
+  if (p == nullptr) { // Lets skip the zero pages.
+    p += os::vm_allocation_granularity();
+  }
+  address p2 = p; // guard against wraparounds
+  int fuse = 0;
+
+  while (p < end && p >= p2) {
+    p2 = p;
+    // Probe for the next mapping.
+    if (checkedVirtualQuery(p, &minfo)) {
+      if (minfo.State != MEM_FREE) {
+        // Found one. Print it out.
+        address p2 = print_one_mapping(&minfo, start, end, st);
+        assert(p2 > p, "Sanity");
+        p = p2;
+      } else {
+        // Note: for free regions, most of MEMORY_BASIC_INFORMATION is undefined.
+        //  Only region dimensions are not: use those to jump to the end of
+        //  the free range.
+        address region_start = (address)minfo.BaseAddress;
+        address region_end = region_start + minfo.RegionSize;
+        assert(p >= region_start && p < region_end, "Sanity");
+        p = region_end;
+      }
+    } else {
+      // MSDN doc on VirtualQuery is unclear about what it means if it returns an error.
+      //  In particular, whether querying an address outside any mappings would report
+      //  a MEM_FREE region or just return an error. From experiments, it seems to return
+      //  a MEM_FREE region for unmapped areas in valid address space and an error if we
+      //  are outside valid address space.
+      // Here, we advance the probe pointer by alloc granularity. But if the range to print
+      //  is large, this may take a long time. Therefore lets stop right away if the address
+      //  is outside of what we know are valid addresses on Windows. Also, add a loop fuse.
+      static const address end_virt = (address)(LP64_ONLY(0x7ffffffffffULL) NOT_LP64(3*G));
+      if (p >= end_virt) {
+        break;
+      } else {
+        // Advance probe pointer, but with a fuse to break long loops.
+        if (fuse++ == 100000) {
+          break;
+        }
+        p += os::vm_allocation_granularity();
+      }
+    }
+  }
 }

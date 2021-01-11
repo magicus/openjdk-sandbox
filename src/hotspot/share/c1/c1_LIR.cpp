@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,13 @@
  */
 
 #include "precompiled.hpp"
+#include "c1/c1_CodeStubs.hpp"
 #include "c1/c1_InstructionPrinter.hpp"
 #include "c1/c1_LIR.hpp"
 #include "c1/c1_LIRAssembler.hpp"
 #include "c1/c1_ValueStack.hpp"
 #include "ci/ciInstance.hpp"
+#include "runtime/safepointMechanism.inline.hpp"
 #include "runtime/sharedRuntime.hpp"
 
 Register LIR_OprDesc::as_register() const {
@@ -236,30 +238,27 @@ void LIR_Op2::verify() const {
 }
 
 
-LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, BasicType type, BlockBegin* block)
+LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, BlockBegin* block)
   : LIR_Op(lir_branch, LIR_OprFact::illegalOpr, (CodeEmitInfo*)NULL)
   , _cond(cond)
-  , _type(type)
   , _label(block->label())
   , _block(block)
   , _ublock(NULL)
   , _stub(NULL) {
 }
 
-LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, BasicType type, CodeStub* stub) :
+LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, CodeStub* stub) :
   LIR_Op(lir_branch, LIR_OprFact::illegalOpr, (CodeEmitInfo*)NULL)
   , _cond(cond)
-  , _type(type)
   , _label(stub->entry())
   , _block(NULL)
   , _ublock(NULL)
   , _stub(stub) {
 }
 
-LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, BasicType type, BlockBegin* block, BlockBegin* ublock)
+LIR_OpBranch::LIR_OpBranch(LIR_Condition cond, BlockBegin* block, BlockBegin* ublock)
   : LIR_Op(lir_cond_float_branch, LIR_OprFact::illegalOpr, (CodeEmitInfo*)NULL)
   , _cond(cond)
-  , _type(type)
   , _label(block->label())
   , _block(block)
   , _ublock(ublock)
@@ -450,13 +449,10 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
     case lir_fld:            // input always valid, result and info always invalid
     case lir_push:           // input always valid, result and info always invalid
     case lir_pop:            // input always valid, result and info always invalid
-    case lir_return:         // input always valid, result and info always invalid
     case lir_leal:           // input and result always valid, info always invalid
     case lir_monaddr:        // input and result always valid, info always invalid
     case lir_null_check:     // input and info always valid, result always invalid
     case lir_move:           // input and result always valid, may have info
-    case lir_pack64:         // input and result always valid
-    case lir_unpack64:       // input and result always valid
     {
       assert(op->as_Op1() != NULL, "must be");
       LIR_Op1* op1 = (LIR_Op1*)op;
@@ -464,6 +460,19 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
       if (op1->_info)                  do_info(op1->_info);
       if (op1->_opr->is_valid())       do_input(op1->_opr);
       if (op1->_result->is_valid())    do_output(op1->_result);
+
+      break;
+    }
+
+    case lir_return:
+    {
+      assert(op->as_OpReturn() != NULL, "must be");
+      LIR_OpReturn* op_ret = (LIR_OpReturn*)op;
+
+      if (op_ret->_info)               do_info(op_ret->_info);
+      if (op_ret->_opr->is_valid())    do_input(op_ret->_opr);
+      if (op_ret->_result->is_valid()) do_output(op_ret->_result);
+      if (op_ret->stub() != NULL)      do_stub(op_ret->stub());
 
       break;
     }
@@ -953,6 +962,15 @@ bool LIR_OpVisitState::no_operands(LIR_Op* op) {
 }
 #endif
 
+// LIR_OpReturn
+LIR_OpReturn::LIR_OpReturn(LIR_Opr opr) :
+    LIR_Op1(lir_return, opr, (CodeEmitInfo*)NULL /* info */),
+    _stub(NULL) {
+  if (VM_Version::supports_stack_watermark_barrier()) {
+    _stub = new C1SafepointPollStub();
+  }
+}
+
 //---------------------------------------------------
 
 
@@ -1405,7 +1423,7 @@ void LIR_List::null_check(LIR_Opr opr, CodeEmitInfo* info, bool deoptimize_on_nu
     // Emit an explicit null check and deoptimize if opr is null
     CodeStub* deopt = new DeoptimizeStub(info, Deoptimization::Reason_null_check, Deoptimization::Action_none);
     cmp(lir_cond_equal, opr, LIR_OprFact::oopConst(NULL));
-    branch(lir_cond_equal, T_OBJECT, deopt);
+    branch(lir_cond_equal, deopt);
   } else {
     // Emit an implicit null check
     append(new LIR_Op1(lir_null_check, opr, info));
@@ -1648,8 +1666,6 @@ const char * LIR_Op::name() const {
      case lir_convert:               s = "convert";       break;
      case lir_alloc_object:          s = "alloc_obj";     break;
      case lir_monaddr:               s = "mon_addr";      break;
-     case lir_pack64:                s = "pack64";        break;
-     case lir_unpack64:              s = "unpack64";      break;
      // LIR_Op2
      case lir_cmp:                   s = "cmp";           break;
      case lir_cmp_l2i:               s = "cmp_l2i";       break;

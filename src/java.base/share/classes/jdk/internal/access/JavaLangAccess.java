@@ -210,6 +210,11 @@ public interface JavaLangAccess {
     void addReadsAllUnnamed(Module m);
 
     /**
+     * Updates module m1 to export a package unconditionally.
+     */
+    void addExports(Module m1, String pkg);
+
+    /**
      * Updates module m1 to export a package to module m2. The export does
      * not result in a strong reference to m2 (m2 can be GC'ed).
      */
@@ -255,6 +260,12 @@ public interface JavaLangAccess {
      * Returns the ServicesCatalog for the given Layer.
      */
     ServicesCatalog getServicesCatalog(ModuleLayer layer);
+
+    /**
+     * Record that this layer has at least one module defined to the given
+     * class loader.
+     */
+    void bindToLoader(ModuleLayer layer, ClassLoader loader);
 
     /**
      * Returns an ordered stream of layers. The first element is the
@@ -337,6 +348,11 @@ public interface JavaLangAccess {
      * Get the string concat initial coder
      */
     long stringConcatInitialCoder();
+
+    /**
+     * Update lengthCoder for constant
+     */
+    long stringConcatMix(long lengthCoder, String constant);
 
     /*
      * Get the class data associated with the given class.

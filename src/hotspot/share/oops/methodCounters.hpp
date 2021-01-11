@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@
 #include "compiler/compilerDefinitions.hpp"
 #include "compiler/compilerOracle.hpp"
 #include "interpreter/invocationCounter.hpp"
-#include "runtime/arguments.hpp"
 #include "utilities/align.hpp"
 
 class MethodCounters : public Metadata {
@@ -95,7 +94,7 @@ class MethodCounters : public Metadata {
 
     // Set per-method thresholds.
     double scale = 1.0;
-    CompilerOracle::has_option_value(mh, "CompileThresholdScaling", scale);
+    CompilerOracle::has_option_value(mh, CompileCommand::CompileThresholdScaling, scale);
 
     int compile_threshold = CompilerConfig::scaled_compile_threshold(CompileThreshold, scale);
     _interpreter_invocation_limit = compile_threshold << InvocationCounter::count_shift;
@@ -113,7 +112,7 @@ class MethodCounters : public Metadata {
   }
 
  public:
-  virtual bool is_methodCounters() const volatile { return true; }
+  virtual bool is_methodCounters() const { return true; }
 
   static MethodCounters* allocate(const methodHandle& mh, TRAPS);
 

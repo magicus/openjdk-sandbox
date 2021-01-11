@@ -86,6 +86,7 @@ public final class PlatformRecording implements AutoCloseable {
     private boolean shouldWriteActiveRecordingEvent = true;
     private Duration flushInterval = Duration.ofSeconds(1);
     private long finalStartChunkNanos = Long.MIN_VALUE;
+    private long startNanos = -1;
 
     PlatformRecording(PlatformRecorder recorder, long id) {
         // Typically the access control context is taken
@@ -103,7 +104,6 @@ public final class PlatformRecording implements AutoCloseable {
     public long start() {
         RecordingState oldState;
         RecordingState newState;
-        long startNanos = -1;
         synchronized (recorder) {
             oldState = getState();
             if (!Utils.isBefore(state, RecordingState.RUNNING)) {
@@ -115,7 +115,7 @@ public final class PlatformRecording implements AutoCloseable {
                 startTime = null;
             }
             startNanos = recorder.start(this);
-            Logger.log(LogTag.JFR, LogLevel.INFO, () -> {
+            if (Logger.shouldLog(LogTag.JFR, LogLevel.INFO)) {
                 // Only print non-default values so it easy to see
                 // which options were added
                 StringJoiner options = new StringJoiner(", ");
@@ -141,8 +141,9 @@ public final class PlatformRecording implements AutoCloseable {
                 if (optionText.length() != 0) {
                     optionText = "{" + optionText + "}";
                 }
-                return "Started recording \"" + getName() + "\" (" + getId() + ") " + optionText;
-            });
+                Logger.log(LogTag.JFR, LogLevel.INFO,
+                        "Started recording \"" + getName() + "\" (" + getId() + ") " + optionText);
+            };
             newState = getState();
         }
         notifyIfStateChanged(oldState, newState);
@@ -330,6 +331,8 @@ public final class PlatformRecording implements AutoCloseable {
         clone.setShouldWriteActiveRecordingEvent(false);
         clone.setName(getName());
         clone.setToDisk(true);
+        clone.setMaxAge(getMaxAge());
+        clone.setMaxSize(getMaxSize());
         // We purposely don't clone settings here, since
         // a union a == a
         if (!isToDisk()) {
@@ -576,12 +579,16 @@ public final class PlatformRecording implements AutoCloseable {
     private void added(RepositoryChunk c) {
         c.use();
         size += c.getSize();
-        Logger.log(JFR, DEBUG, () -> "Recording \"" + name + "\" (" + id + ") added chunk " + c.toString() + ", current size=" + size);
+        if (Logger.shouldLog(JFR, DEBUG)) {
+            Logger.log(JFR, DEBUG, "Recording \"" + name + "\" (" + id + ") added chunk " + c.toString() + ", current size=" + size);
+        }
     }
 
     private void removed(RepositoryChunk c) {
         size -= c.getSize();
-        Logger.log(JFR, DEBUG, () -> "Recording \"" + name + "\" (" + id + ") removed chunk " + c.toString() + ", current size=" + size);
+        if (Logger.shouldLog(JFR, DEBUG)) {
+            Logger.log(JFR, DEBUG, "Recording \"" + name + "\" (" + id + ") removed chunk " + c.toString() + ", current size=" + size);
+        }
         c.release();
     }
 
@@ -819,11 +826,29 @@ public final class PlatformRecording implements AutoCloseable {
         }
     }
 
+    public long getStartNanos() {
+        return startNanos;
+    }
+
     public long getFinalChunkStartNanos() {
         return finalStartChunkNanos;
     }
 
     public void setFinalStartnanos(long chunkStartNanos) {
        this.finalStartChunkNanos = chunkStartNanos;
+    }
+
+    public void removeBefore(Instant timestamp) {
+        synchronized (recorder) {
+            while (!chunks.isEmpty()) {
+                RepositoryChunk oldestChunk = chunks.peek();
+                if (!oldestChunk.getEndTime().isBefore(timestamp)) {
+                    return;
+                }
+                chunks.removeFirst();
+                removed(oldestChunk);
+            }
+        }
+
     }
 }

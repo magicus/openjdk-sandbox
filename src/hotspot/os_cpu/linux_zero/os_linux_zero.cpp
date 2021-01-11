@@ -38,7 +38,6 @@
 #include "prims/jniFastGetField.hpp"
 #include "prims/jvm_misc.hpp"
 #include "runtime/arguments.hpp"
-#include "runtime/extendedPC.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/java.hpp"
@@ -49,6 +48,7 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
 #include "runtime/timer.hpp"
+#include "signals_posix.hpp"
 #include "utilities/align.hpp"
 #include "utilities/events.hpp"
 #include "utilities/vmError.hpp"
@@ -86,28 +86,22 @@ char* os::non_memory_address_word() {
   // Must never look like an address returned by reserve_memory,
   // even in its subfields (as defined by the CPU immediate fields,
   // if the CPU splits constants across multiple instructions).
-#ifdef SPARC
-  // On SPARC, 0 != %hi(any real address), because there is no
-  // allocation in the first 1Kb of the virtual address space.
-  return (char *) 0;
-#else
   // This is the value for x86; works pretty well for PPC too.
   return (char *) -1;
-#endif // SPARC
 }
 
-address os::Linux::ucontext_get_pc(const ucontext_t* uc) {
+address os::Posix::ucontext_get_pc(const ucontext_t* uc) {
   ShouldNotCallThis();
   return NULL; // silence compile warnings
 }
 
-void os::Linux::ucontext_set_pc(ucontext_t * uc, address pc) {
+void os::Posix::ucontext_set_pc(ucontext_t * uc, address pc) {
   ShouldNotCallThis();
 }
 
-ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
-                                        intptr_t** ret_sp,
-                                        intptr_t** ret_fp) {
+address os::fetch_frame_from_context(const void* ucVoid,
+                                     intptr_t** ret_sp,
+                                     intptr_t** ret_fp) {
   ShouldNotCallThis();
   return NULL; // silence compile warnings
 }
@@ -117,53 +111,14 @@ frame os::fetch_frame_from_context(const void* ucVoid) {
   return frame(NULL, NULL); // silence compile warnings
 }
 
-extern "C" JNIEXPORT int
-JVM_handle_linux_signal(int sig,
-                        siginfo_t* info,
-                        void* ucVoid,
-                        int abort_if_unrecognized) {
-  ucontext_t* uc = (ucontext_t*) ucVoid;
-
-  Thread* t = Thread::current_or_null_safe();
-
-  SignalHandlerMark shm(t);
+bool PosixSignals::pd_hotspot_signal_handler(int sig, siginfo_t* info,
+                                             ucontext_t* uc, JavaThread* thread) {
 
   // handle SafeFetch faults
   if (sig == SIGSEGV || sig == SIGBUS) {
     sigjmp_buf* const pjb = get_jmp_buf_for_continuation();
     if (pjb) {
       siglongjmp(*pjb, 1);
-    }
-  }
-
-  // Note: it's not uncommon that JNI code uses signal/sigset to
-  // install then restore certain signal handler (e.g. to temporarily
-  // block SIGPIPE, or have a SIGILL handler when detecting CPU
-  // type). When that happens, JVM_handle_linux_signal() might be
-  // invoked with junk info/ucVoid. To avoid unnecessary crash when
-  // libjsig is not preloaded, try handle signals that do not require
-  // siginfo/ucontext first.
-
-  if (sig == SIGPIPE || sig == SIGXFSZ) {
-    // allow chained handler to go first
-    if (os::Linux::chained_handler(sig, info, ucVoid)) {
-      return true;
-    } else {
-      // Ignoring SIGPIPE/SIGXFSZ - see bugs 4229104 or 6499219
-      return true;
-    }
-  }
-
-  JavaThread* thread = NULL;
-  VMThread* vmthread = NULL;
-  if (os::Linux::signal_handlers_are_installed) {
-    if (t != NULL ){
-      if(t->is_Java_thread()) {
-        thread = (JavaThread*)t;
-      }
-      else if(t->is_VM_thread()){
-        vmthread = (VMThread *)t;
-      }
     }
   }
 
@@ -174,13 +129,14 @@ JVM_handle_linux_signal(int sig,
 
       // check if fault address is within thread stack
       if (thread->is_in_full_stack(addr)) {
+        StackOverflow* overflow_state = thread->stack_overflow_state();
         // stack overflow
-        if (thread->in_stack_yellow_reserved_zone(addr)) {
-          thread->disable_stack_yellow_reserved_zone();
+        if (overflow_state->in_stack_yellow_reserved_zone(addr)) {
+          overflow_state->disable_stack_yellow_reserved_zone();
           ShouldNotCallThis();
         }
-        else if (thread->in_stack_red_zone(addr)) {
-          thread->disable_stack_red_zone();
+        else if (overflow_state->in_stack_red_zone(addr)) {
+          overflow_state->disable_stack_red_zone();
           ShouldNotCallThis();
         }
         else {
@@ -223,40 +179,8 @@ JVM_handle_linux_signal(int sig,
     }*/
   }
 
-  // signal-chaining
-  if (os::Linux::chained_handler(sig, info, ucVoid)) {
-     return true;
-  }
+  return false; // Fatal error
 
-  if (!abort_if_unrecognized) {
-    // caller wants another chance, so give it to him
-    return false;
-  }
-
-#ifndef PRODUCT
-  if (sig == SIGSEGV) {
-    fatal("\n#"
-          "\n#    /--------------------\\"
-          "\n#    | segmentation fault |"
-          "\n#    \\---\\ /--------------/"
-          "\n#        /"
-          "\n#    [-]        |\\_/|    "
-          "\n#    (+)=C      |o o|__  "
-          "\n#    | |        =-*-=__\\ "
-          "\n#    OOO        c_c_(___)");
-  }
-#endif // !PRODUCT
-
-  char buf[64];
-
-  sprintf(buf, "caught unhandled signal %d", sig);
-
-// Silence -Wformat-security warning for fatal()
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED
-  fatal(buf);
-PRAGMA_DIAG_POP
-  return true; // silence compiler warnings
 }
 
 void os::Linux::init_thread_fpu_state(void) {
@@ -280,7 +204,7 @@ bool os::is_allocatable(size_t bytes) {
     return true;
   }
 
-  char* addr = reserve_memory(bytes, NULL);
+  char* addr = reserve_memory(bytes);
 
   if (addr != NULL) {
     release_memory(addr, bytes);
@@ -486,6 +410,7 @@ extern "C" {
     long long unsigned int oldval,
     long long unsigned int newval) {
     ShouldNotCallThis();
+    return 0; // silence compiler warnings
   }
 };
 #endif // !_LP64

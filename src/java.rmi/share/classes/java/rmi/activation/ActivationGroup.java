@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -94,7 +94,12 @@ import java.security.PrivilegedAction;
  * @see         ActivationGroupDesc
  * @see         ActivationGroupID
  * @since       1.2
+ * @deprecated
+ * See the <a href="{@docRoot}/java.rmi/java/rmi/activation/package-summary.html">
+ * {@code java.rmi.activation}</a> package specification for further information.
  */
+@Deprecated(forRemoval=true, since="15")
+@SuppressWarnings("removal")
 public abstract class ActivationGroup
         extends UnicastRemoteObject
         implements ActivationInstantiator
@@ -178,10 +183,10 @@ public abstract class ActivationGroup
      * @param id the object's activation identifier
      * @return true if the object was successfully deactivated; otherwise
      *         returns false.
-     * @exception UnknownObjectException if object is unknown (may already
+     * @throws UnknownObjectException if object is unknown (may already
      * be inactive)
-     * @exception RemoteException if call informing monitor fails
-     * @exception ActivationException if group is inactive
+     * @throws RemoteException if call informing monitor fails
+     * @throws ActivationException if group is inactive
      * @since 1.2
      */
     public boolean inactiveObject(ActivationID id)
@@ -202,9 +207,9 @@ public abstract class ActivationGroup
      *
      * @param id the object's identifier
      * @param obj the remote object implementation
-     * @exception UnknownObjectException if object is not registered
-     * @exception RemoteException if call informing monitor fails
-     * @exception ActivationException if group is inactive
+     * @throws UnknownObjectException if object is not registered
+     * @throws RemoteException if call informing monitor fails
+     * @throws ActivationException if group is inactive
      * @since 1.2
      */
     public abstract void activeObject(ActivationID id, Remote obj)
@@ -264,13 +269,13 @@ public abstract class ActivationGroup
      * @param incarnation the group's incarnation number (zero on group's
      * initial creation)
      * @return the activation group for the VM
-     * @exception ActivationException if group already exists or if error
+     * @throws ActivationException if group already exists or if error
      * occurs during group creation
-     * @exception SecurityException if permission to create group is denied.
+     * @throws SecurityException if permission to create group is denied.
      * (Note: The default implementation of the security manager
      * <code>checkSetFactory</code>
      * method requires the RuntimePermission "setFactory")
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @see SecurityManager#checkSetFactory
      * @since 1.2
@@ -350,7 +355,7 @@ public abstract class ActivationGroup
     /**
      * Returns the current activation group's identifier.  Returns null
      * if no group is currently active for this VM.
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @return the activation group's identifier
      * @since 1.2
@@ -366,7 +371,7 @@ public abstract class ActivationGroup
      * so if a group has already become active and deactivated.
      *
      * @return the activation group identifier
-     * @exception ActivationException if error occurs during group
+     * @throws ActivationException if error occurs during group
      * creation, if security manager is not set, or if the group
      * has already been created and deactivated.
      */
@@ -396,12 +401,12 @@ public abstract class ActivationGroup
      * This could result in a SecurityException.
      *
      * @param system remote reference to the <code>ActivationSystem</code>
-     * @exception ActivationException if activation system is already set
-     * @exception SecurityException if permission to set the activation system is denied.
+     * @throws ActivationException if activation system is already set
+     * @throws SecurityException if permission to set the activation system is denied.
      * (Note: The default implementation of the security manager
      * <code>checkSetFactory</code>
      * method requires the RuntimePermission "setFactory")
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @see #getSystem
      * @see SecurityManager#checkSetFactory
@@ -434,10 +439,10 @@ public abstract class ActivationGroup
      * <code>java.rmi.activation.port</code>.
      *
      * @return the activation system for the VM/group
-     * @exception ActivationException if activation system cannot be
+     * @throws ActivationException if activation system cannot be
      *  obtained or is not bound
      * (means that it is not running)
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @see #setSystem
      * @since 1.2
@@ -468,9 +473,9 @@ public abstract class ActivationGroup
      *
      * @param id the object's identifier
      * @param mobj a marshalled object containing the remote object's stub
-     * @exception UnknownObjectException if object is not registered
-     * @exception RemoteException if call informing monitor fails
-     * @exception ActivationException if an activation error occurs
+     * @throws UnknownObjectException if object is not registered
+     * @throws RemoteException if call informing monitor fails
+     * @throws ActivationException if an activation error occurs
      * @since 1.2
      */
     protected void activeObject(ActivationID id,
@@ -487,8 +492,8 @@ public abstract class ActivationGroup
      * <code>ActivationMonitor</code>. Also, the current group
      * for the VM is set to null.
      *
-     * @exception UnknownGroupException if group is not registered
-     * @exception RemoteException if call informing monitor fails
+     * @throws UnknownGroupException if group is not registered
+     * @throws RemoteException if call informing monitor fails
      * @since 1.2
      */
     protected void inactiveGroup()
@@ -524,7 +529,7 @@ public abstract class ActivationGroup
 
     /**
      * Returns the current group for the VM.
-     * @exception ActivationException if current group is null (not active)
+     * @throws ActivationException if current group is null (not active)
      */
     static synchronized ActivationGroup currentGroup()
         throws ActivationException

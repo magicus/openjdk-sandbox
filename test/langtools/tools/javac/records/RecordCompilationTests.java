@@ -27,6 +27,7 @@
  * RecordCompilationTests
  *
  * @test
+ * @bug 8250629 8252307 8247352 8241151 8246774
  * @summary Negative compilation tests, and positive compilation (smoke) tests for records
  * @library /lib/combo /tools/lib /tools/javac/lib
  * @modules
@@ -35,9 +36,8 @@
  *      jdk.compiler/com.sun.tools.javac.util
  *      jdk.jdeps/com.sun.tools.classfile
  * @build JavacTestingAbstractProcessor
- * @compile --enable-preview -source ${jdk.version} RecordCompilationTests.java
- * @run testng/othervm -DuseAP=false --enable-preview RecordCompilationTests
- * @run testng/othervm -DuseAP=true --enable-preview RecordCompilationTests
+ * @run testng/othervm -DuseAP=false RecordCompilationTests
+ * @run testng/othervm -DuseAP=true RecordCompilationTests
  */
 
 import java.io.File;
@@ -119,17 +119,7 @@ import static org.testng.Assert.assertEquals;
 
 @Test
 public class RecordCompilationTests extends CompilationTestCase {
-    // @@@ When records become a permanent feature, we don't need these any more
-    private static String[] PREVIEW_OPTIONS = {
-            "--enable-preview",
-            "-source", Integer.toString(Runtime.version().feature())
-    };
-
-    private static String[] PREVIEW_OPTIONS_WITH_AP = {
-            "--enable-preview",
-            "-source", Integer.toString(Runtime.version().feature()),
-            "-processor", SimplestAP.class.getName()
-    };
+    private static String[] OPTIONS_WITH_AP = {"-processor", SimplestAP.class.getName()};
 
     private static final List<String> BAD_COMPONENT_NAMES = List.of(
             "clone", "finalize", "getClass", "hashCode",
@@ -145,16 +135,20 @@ public class RecordCompilationTests extends CompilationTestCase {
         }
     }
 
+    boolean useAP;
+
     public RecordCompilationTests() {
-        boolean useAP = System.getProperty("useAP") == null ? false : System.getProperty("useAP").equals("true");
+        useAP = System.getProperty("useAP", "false").equals("true");
         setDefaultFilename("R.java");
-        setCompileOptions(useAP ? PREVIEW_OPTIONS_WITH_AP : PREVIEW_OPTIONS);
+        if (useAP) {
+            setCompileOptions(OPTIONS_WITH_AP);
+        }
         System.out.println(useAP ? "running all tests using an annotation processor" : "running all tests without annotation processor");
     }
 
     public void testMalformedDeclarations() {
         assertFail("compiler.err.premature.eof", "record R()");
-        assertFail("compiler.err.premature.eof", "record R();");
+        assertFail("compiler.err.expected", "record R();");
         assertFail("compiler.err.illegal.start.of.type", "record R(,) { }");
         assertFail("compiler.err.illegal.start.of.type", "record R((int x)) { }");
         assertFail("compiler.err.record.header.expected", "record R { }");
@@ -394,6 +388,9 @@ public class RecordCompilationTests extends CompilationTestCase {
         assertFail("compiler.err.first.statement.must.be.call.to.another.constructor",
                 "record R(int x, int y) { public R(int y, int x, int z) { this.x = this.y = 0; } }");
 
+        assertFail("compiler.err.first.statement.must.be.call.to.another.constructor",
+                "record R(int x, int y) { public R(int y, int x, int z) { super(); this.x = this.y = 0; } }");
+
         assertOK("record R(int x, int y) { " +
                  "    public R(int x, int y, int z) { this(x, y); } " +
                  "}");
@@ -480,71 +477,483 @@ public class RecordCompilationTests extends CompilationTestCase {
         assertFail("compiler.err.already.defined", template);
     }
 
-    public void testStaticLocalTypes() {
-        // local records can also be final
-        assertOK("class R { \n" +
-                "    void m() { \n" +
-                "        final record RR(int x) { };\n" +
-                "    }\n" +
-                "}");
+    public void testStaticLocals() {
+        // static locals can't capture local variables, instance fields or type variables
+        for (String s : List.of(
+                "record RR(int x) { public int x() { return y; }};",
+                "record RR(int x) { public int x() { return z; }};",
+                "record RR(int x) { public int x() { return instance; }};",
+                "record RR(T t) {};",
+                "record RR(U u) {};",
 
-        // Cant capture locals
-        assertFail("compiler.err.non-static.cant.be.ref",
-                "class R { \n" +
-                        "    void m(int y) { \n" +
-                        "        record RR(int x) { public int x() { return y; }};\n" +
-                        "    }\n" +
-                        "}");
+                "interface I { default int x() { return y; }};",
+                "interface I { default int x() { return z; }};",
+                "interface I { default int x() { return instance; }};",
+                "interface I { default int x(T t) { return 0; }};",
+                "interface I { default int x(U u) { return 0; }};",
 
-        assertFail("compiler.err.non-static.cant.be.ref",
-                "class R { \n" +
-                        "    void m() {\n" +
-                        "        int y;\n" +
-                        "        record RR(int x) { public int x() { return y; }};\n" +
-                        "    }\n" +
-                        "}");
-
-        // instance fields
-        assertFail("compiler.err.non-static.cant.be.ref",
-                "class R { \n" +
-                        "    int z = 0;\n" +
-                        "    void m() { \n" +
-                        "        record RR(int x) { public int x() { return z; }};\n" +
-                        "    }\n" +
-                        "}");
-
-        // or type variables
-        assertFail("compiler.err.non-static.cant.be.ref",
-                "class R<T> { \n" +
-                        "    void m() { \n" +
-                        "        record RR(T t) {};\n" +
-                        "    }\n" +
-                        "}");
-
-        // but static fields are OK
-        assertOK("class R { \n" +
-                "    static int z = 0;\n" +
-                "    void m() { \n" +
-                "        record RR(int x) { public int x() { return z; }};\n" +
-                "    }\n" +
-                "}");
-        // Can't self-shadow
-        assertFail("compiler.err.already.defined",
+                "enum E { A; int x() { return y; }};",
+                "enum E { A; int x() { return z; }};",
+                "enum E { A; int x() { return instance; }};",
+                "enum E { A; int x(T t) { return 0; }};",
+                "enum E { A; int x(U u) { return 0; }};"
+        )) {
+            assertFail("compiler.err.non-static.cant.be.ref",
                 """
-                class R {
-                    void m() {
-                        record R(int x) { };
+                class R<T> {
+                    int instance = 0;
+                    <U> U m(int y) {
+                        int z;
+                        #S
+                        return null;
+                    }
+                }
+                """.replaceFirst("#S", s));
+        }
+
+        // a similar example but a bit more complex
+        for (String s : List.of(
+                "record R() { void test1() { class X { void test2() { System.err.println(localVar); } } } }",
+                "record R() { void test1() { class X { void test2() { System.err.println(param); } } } }",
+                "record R() {void test1() { class X { void test2() { System.err.println(instanceField); } } } }",
+                "record R() { void test1() { class X { T t; } } }",
+                "record R() { void test1() { class X { U u; } } }",
+
+                "interface I { default void test1() { class X { void test2() { System.err.println(localVar); } } } }",
+                "interface I() { default void test1() { class X { void test2() {System.err.println(param);} } } }",
+                "interface I { default void test1() { class X { void test2() { System.err.println(instanceField); } } } }",
+                "interface I { default void test1() { class X { T t; } } }",
+                "interface I() { default void test1() { class X {U u;} } }",
+
+                "enum E { A; void test1() { class X { void test2() { System.err.println(localVar); } } } }",
+                "enum E { A; void test1() { class X { void test2() {System.err.println(param);} } } }",
+                "enum E { A; void test1() { class X { void test2() { System.err.println(instanceField); } } } }",
+                "enum E { A; void test1() { class X { T t; } } }",
+                "enum E { A; void test1() { class X {U u;} } }"
+        )) {
+            assertFail("compiler.err.non-static.cant.be.ref",
+                    """
+                    class C<T> {
+                        String instanceField = "instance";
+                        static <U> U m(String param) {
+                            String localVar = "local";
+                            #S
+                            return null;
+                    }
+                }
+                """.replaceFirst("#S", s));
+        }
+
+        // can't self-shadow
+        for (String s : List.of("record R() {}", "interface R {}", "enum R { A }")) {
+            assertFail("compiler.err.already.defined", "class R { void m() { #S } }".replaceFirst("#S", s));
+        }
+
+        // can't be explicitly static
+        for (String s : List.of("static record RR() { }", "static interface I {}", "static enum E { A }")) {
+            assertFail("compiler.err.illegal.start.of.expr", "class R { void m() { #S } }".replaceFirst("#S", s));
+        }
+
+        // but static fields can be accessed
+        for (String s : List.of(
+                "record RR() { public int x() { return z; } };",
+                "interface I { default int x() { return z; } }",
+                "enum E { A; int x() { return z; } }"
+        )) {
+            assertOK("class R { static int z = 0; void m() { #S } }".replaceFirst("#S", s));
+        }
+
+        // local records can also be final
+        assertOK("class R { void m() { final record RR(int x) { }; } }");
+    }
+
+    public void testStaticDefinitionsInInnerClasses() {
+        // static defs in inner classes can't capture instance fields or type variables
+        for (String s : List.of(
+                """
+                record R() {
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                record R() {
+                    void test(T t) {}
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                interface I {
+                    default void test() { System.err.println(field); }
+                }
+                """,
+                """
+                interface I {
+                    default void test(T t) {}
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                enum E {
+                    A;
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test(T t) {}
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                static class SC {
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                static class SC {
+                    void test(T t) {}
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """
+        )) {
+            assertFail("compiler.err.non-static.cant.be.ref",
+                    """
+                    class C<T> {
+                        String field = "field";
+                        class Inner {
+                            #S
+                        }
+                    }
+                    """.replaceFirst("#S", s));
+        }
+
+        // another, more complex, example
+        // static defs in inner classes can't capture instance locals, fields or type variables
+        for (String s : List.of(
+                """
+                record R() {
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X { void test2() { System.err.println(field); } }
+                    }
+                }
+                """,
+                """
+                record R() {
+                    void test() { System.err.println(param); }
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X { void test2() { System.err.println(param); } }
+                    }
+                }
+                """,
+                """
+                record R() {
+                    void test() { System.err.println(local); }
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X { void test2() { System.err.println(local); } }
+                    }
+                }
+                """,
+                """
+                record R() {
+                    void test(T t) {}
+                }
+                """,
+                """
+                record R() {
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                interface I {
+                    default void test() { System.err.println(field); }
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                interface I {
+                    default void test() { System.err.println(param); }
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X {
+                            void test2() { System.err.println(param); }
+                        }
+                    }
+                }
+                """,
+                """
+                interface I {
+                    default void test() { System.err.println(local); }
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X {
+                            void test2() { System.err.println(local); }
+                        }
+                    }
+                }
+                """,
+                """
+                interface I {
+                    default void test(T t) {}
+                }
+                """,
+                """
+                interface I {
+                    default void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                enum E {
+                    A;
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test() { System.err.println(param); }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(param); }
+                        }
+                    }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test() { System.err.println(local); }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(local); }
+                        }
+                    }
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test(T t) {}
+                }
+                """,
+                """
+                enum E {
+                    A;
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """,
+
+                """
+                static class SC {
+                    void test() { System.err.println(field); }
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(field); }
+                        }
+                    }
+                }
+                """,
+                """
+                static class SC {
+                    void test() { System.err.println(param); }
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(param); }
+                        }
+                    }
+                }
+                """,
+                """
+                static class SC {
+                    void test() { System.err.println(local); }
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X {
+                            void test2() { System.err.println(local); }
+                        }
+                    }
+                }
+                """,
+                """
+                static class SC {
+                    void test(T t) {}
+                }
+                """,
+                """
+                static class SC {
+                    void test1() {
+                        class X { void test2(T t) {} }
+                    }
+                }
+                """
+        )) {
+            assertFail("compiler.err.non-static.cant.be.ref",
+                    """
+                    class C<T> {
+                        String field = "field";
+                        <U> U m(String param) {
+                            String local = "local";
+                            class Local {
+                                class Inner { #S }
+                            }
+                            return null;
+                        }
+                    }
+                    """.replaceFirst("#S", s));
+        }
+
+        // inner classes can contain static methods too
+        assertOK(
+                """
+                class C {
+                    class Inner {
+                        // static method inside inner class
+                        static void m() {}
                     }
                 }
                 """
         );
-        // can't be explicitly static
-        assertFail("compiler.err.illegal.start.of.expr",
+
+        assertOK(
                 """
-                class R {
-                    void m() {
-                        static record RR(int x) { };
-                    }
+                class C {
+                     void m() {
+                         new Object() {
+                            // static method inside inner class
+                            static void m() {}
+                         };
+                     }
                 }
                 """
         );
@@ -578,7 +987,7 @@ public class RecordCompilationTests extends CompilationTestCase {
     }
 
     public void testRecordsInsideInner() {
-        assertFail("compiler.err.static.declaration.not.allowed.in.inner.classes",
+        assertOK(
                 """
                 class Outer {
                     class Inner {
@@ -587,7 +996,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                 }
                 """
         );
-        assertFail("compiler.err.static.declaration.not.allowed.in.inner.classes",
+        assertOK(
                 """
                 class Outer {
                     public void test() {
@@ -597,7 +1006,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                     }
                 }
                 """);
-        assertFail("compiler.err.static.declaration.not.allowed.in.inner.classes",
+        assertOK(
                 """
                 class Outer {
                     Runnable run = new Runnable() {
@@ -606,7 +1015,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                     };
                 }
                 """);
-        assertFail("compiler.err.static.declaration.not.allowed.in.inner.classes",
+        assertOK(
                 """
                 class Outer {
                     void m() {
@@ -708,19 +1117,21 @@ public class RecordCompilationTests extends CompilationTestCase {
     }
 
     public void testAcceptRecordId() {
+        String[] previousOptions = getCompileOptions();
         String[] testOptions = {/* no options */};
         setCompileOptions(testOptions);
-        assertOKWithWarning("compiler.warn.restricted.type.not.allowed.preview",
+        assertFail("compiler.err.illegal.start.of.type",
                 "class R {\n" +
                 "    record RR(int i) {\n" +
                 "        return null;\n" +
                 "    }\n" +
                 "    class record {}\n" +
                 "}");
-        setCompileOptions(PREVIEW_OPTIONS);
+        setCompileOptions(previousOptions);
     }
 
     public void testAnnos() throws Exception {
+        String[] previousOptions = getCompileOptions();
         String srcTemplate =
                 """
                     import java.lang.annotation.*;
@@ -746,6 +1157,12 @@ public class RecordCompilationTests extends CompilationTestCase {
                 "ElementType.TYPE_USE,ElementType.FIELD,ElementType.PARAMETER",
                 "ElementType.TYPE_USE,ElementType.FIELD,ElementType.RECORD_COMPONENT",
                 "ElementType.FIELD,ElementType.TYPE_USE",
+                "ElementType.FIELD,ElementType.CONSTRUCTOR",
+                "ElementType.FIELD,ElementType.LOCAL_VARIABLE",
+                "ElementType.FIELD,ElementType.ANNOTATION_TYPE",
+                "ElementType.FIELD,ElementType.PACKAGE",
+                "ElementType.FIELD,ElementType.TYPE_PARAMETER",
+                "ElementType.FIELD,ElementType.MODULE",
                 "ElementType.METHOD,ElementType.TYPE_USE",
                 "ElementType.PARAMETER,ElementType.TYPE_USE",
                 "ElementType.RECORD_COMPONENT,ElementType.TYPE_USE",
@@ -755,8 +1172,6 @@ public class RecordCompilationTests extends CompilationTestCase {
         );
 
         String[] generalOptions = {
-                "--enable-preview",
-                "-source", Integer.toString(Runtime.version().feature()),
                 "-processor", Processor.class.getName(),
                 "-Atargets="
         };
@@ -777,7 +1192,7 @@ public class RecordCompilationTests extends CompilationTestCase {
             /* if FIELD is one of the targets then there must be a declaration annotation applied to the field, apart from
              * the type annotation
              */
-            if (target.contains("FIELD")) {
+            if (target.contains("ElementType.FIELD")) {
                 checkAnno(classFile,
                         (RuntimeAnnotations_attribute)findAttributeOrFail(
                                 field.attributes,
@@ -788,7 +1203,7 @@ public class RecordCompilationTests extends CompilationTestCase {
             }
 
             // lets check now for the type annotation
-            if (target.contains("TYPE_USE")) {
+            if (target.contains("ElementType.TYPE_USE")) {
                 checkTypeAnno(
                         classFile,
                         (RuntimeVisibleTypeAnnotations_attribute)findAttributeOrFail(field.attributes, RuntimeVisibleTypeAnnotations_attribute.class),
@@ -803,7 +1218,7 @@ public class RecordCompilationTests extends CompilationTestCase {
             /* if PARAMETER is one of the targets then there must be a declaration annotation applied to the parameter, apart from
              * the type annotation
              */
-            if (target.contains("PARAMETER")) {
+            if (target.contains("ElementType.PARAMETER")) {
                 checkParameterAnno(classFile,
                         (RuntimeVisibleParameterAnnotations_attribute)findAttributeOrFail(
                                 init.attributes,
@@ -813,7 +1228,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                 assertAttributeNotPresent(init.attributes, RuntimeVisibleAnnotations_attribute.class);
             }
             // let's check now for the type annotation
-            if (target.contains("TYPE_USE")) {
+            if (target.contains("ElementType.TYPE_USE")) {
                 checkTypeAnno(
                         classFile,
                         (RuntimeVisibleTypeAnnotations_attribute) findAttributeOrFail(init.attributes, RuntimeVisibleTypeAnnotations_attribute.class),
@@ -827,7 +1242,7 @@ public class RecordCompilationTests extends CompilationTestCase {
             /* if METHOD is one of the targets then there must be a declaration annotation applied to the accessor, apart from
              * the type annotation
              */
-            if (target.contains("METHOD")) {
+            if (target.contains("ElementType.METHOD")) {
                 checkAnno(classFile,
                         (RuntimeAnnotations_attribute)findAttributeOrFail(
                                 accessor.attributes,
@@ -837,7 +1252,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                 assertAttributeNotPresent(accessor.attributes, RuntimeVisibleAnnotations_attribute.class);
             }
             // let's check now for the type annotation
-            if (target.contains("TYPE_USE")) {
+            if (target.contains("ElementType.TYPE_USE")) {
                 checkTypeAnno(
                         classFile,
                         (RuntimeVisibleTypeAnnotations_attribute)findAttributeOrFail(accessor.attributes, RuntimeVisibleTypeAnnotations_attribute.class),
@@ -852,7 +1267,7 @@ public class RecordCompilationTests extends CompilationTestCase {
             /* if RECORD_COMPONENT is one of the targets then there must be a declaration annotation applied to the
              * field, apart from the type annotation
              */
-            if (target.contains("RECORD_COMPONENT")) {
+            if (target.contains("ElementType.RECORD_COMPONENT")) {
                 checkAnno(classFile,
                         (RuntimeAnnotations_attribute)findAttributeOrFail(
                                 record.component_info_arr[0].attributes,
@@ -862,7 +1277,7 @@ public class RecordCompilationTests extends CompilationTestCase {
                 assertAttributeNotPresent(record.component_info_arr[0].attributes, RuntimeVisibleAnnotations_attribute.class);
             }
             // lets check now for the type annotation
-            if (target.contains("TYPE_USE")) {
+            if (target.contains("ElementType.TYPE_USE")) {
                 checkTypeAnno(
                         classFile,
                         (RuntimeVisibleTypeAnnotations_attribute)findAttributeOrFail(
@@ -875,7 +1290,7 @@ public class RecordCompilationTests extends CompilationTestCase {
         }
 
         // let's reset the default compiler options for other tests
-        setCompileOptions(PREVIEW_OPTIONS);
+        setCompileOptions(previousOptions);
     }
 
     private void checkTypeAnno(ClassFile classFile,
@@ -998,7 +1413,6 @@ public class RecordCompilationTests extends CompilationTestCase {
                         throw new AssertionError("unexpected element kind");
                 }
             }
-            Assert.check(targetSet.isEmpty(), targetSet.toString());
         }
 
         private void checkTypeAnnotations(Element rootElement) {
@@ -1130,6 +1544,26 @@ public class RecordCompilationTests extends CompilationTestCase {
                         this.args = args;
                     }
                 }
+                """,
+                """
+                record R(@A int... ints) {}
+
+                @java.lang.annotation.Target({
+                        java.lang.annotation.ElementType.TYPE_USE,
+                        java.lang.annotation.ElementType.RECORD_COMPONENT})
+                @interface A {}
+                """,
+                """
+                record R(@A int... ints) {
+                    R(@A int... ints) {
+                        this.ints = ints;
+                    }
+                }
+
+                @java.lang.annotation.Target({
+                        java.lang.annotation.ElementType.TYPE_USE,
+                        java.lang.annotation.ElementType.RECORD_COMPONENT})
+                @interface A {}
                 """
         )) {
             assertOK(source);
@@ -1284,6 +1718,108 @@ public class RecordCompilationTests extends CompilationTestCase {
                 record R(int i) {
                     R {
                         (this).i = i;
+                    }
+                }
+                """
+        );
+    }
+
+    public void testNoNPEStaticAnnotatedFields() {
+        assertOK(
+                """
+                import java.lang.annotation.Native;
+                record R() {
+                    @Native public static final int i = 0;
+                }
+                """
+        );
+        assertOK(
+                """
+                import java.lang.annotation.Native;
+                class Outer {
+                    record R() {
+                        @Native public static final int i = 0;
+                    }
+                }
+                """
+        );
+        assertOK(
+                """
+                import java.lang.annotation.Native;
+                class Outer {
+                    void m() {
+                        record R () {
+                            @Native public static final int i = 0;
+                        }
+                    }
+                }
+                """
+        );
+    }
+
+    public void testDoNotAllowCStyleArraySyntaxForRecComponents() {
+        assertFail("compiler.err.record.component.and.old.array.syntax",
+                """
+                record R(int i[]) {}
+                """
+        );
+        assertFail("compiler.err.record.component.and.old.array.syntax",
+                """
+                record R(String s[]) {}
+                """
+        );
+        assertFail("compiler.err.record.component.and.old.array.syntax",
+                """
+                record R<T>(T t[]) {}
+                """
+        );
+    }
+
+    public void testNoWarningForSerializableRecords() {
+        if (!useAP) {
+            /* dont execute this test when the default annotation processor is on as it will fail due to
+             * spurious warnings
+             */
+            appendCompileOptions("-Werror", "-Xlint:serial");
+            assertOK(
+                    """
+                    import java.io.*;
+                    record R() implements java.io.Serializable {}
+                    """
+            );
+            removeLastCompileOptions(2);
+        }
+    }
+
+    public void testAnnotationsOnVarargsRecComp() {
+        assertOK(
+                """
+                import java.lang.annotation.*;
+
+                @Target({ElementType.TYPE_USE})
+                @interface Simple {}
+
+                record R(@Simple int... val) {
+                    static void test() {
+                        R rec = new R(10, 20);
+                    }
+                }
+                """
+        );
+        assertOK(
+                """
+                import java.lang.annotation.*;
+
+                @Target({ElementType.TYPE_USE})
+                @interface SimpleContainer{ Simple[] value(); }
+
+                @Repeatable(SimpleContainer.class)
+                @Target({ElementType.TYPE_USE})
+                @interface Simple {}
+
+                record R(@Simple int... val) {
+                    static void test() {
+                        R rec = new R(10, 20);
                     }
                 }
                 """

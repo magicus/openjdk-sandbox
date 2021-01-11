@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,7 +48,12 @@ import java.rmi.MarshalledObject;
  * @author      Ann Wollrath
  * @since       1.2
  * @see         java.rmi.activation.Activatable
+ * @deprecated
+ * See the <a href="{@docRoot}/java.rmi/java/rmi/activation/package-summary.html">
+ * {@code java.rmi.activation}</a> package specification for further information.
  */
+@Deprecated(forRemoval=true, since="15")
+@SuppressWarnings("removal")
 public final class ActivationDesc implements Serializable {
 
     /**
@@ -104,8 +109,8 @@ public final class ActivationDesc implements Serializable {
      * loaded)
      * @param data the object's initialization (activation) data contained
      * in marshalled form.
-     * @exception ActivationException if the current group is nonexistent
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws ActivationException if the current group is nonexistent
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @since 1.2
      */
@@ -143,8 +148,8 @@ public final class ActivationDesc implements Serializable {
      * activated on demand.  Specifying <code>restart</code> to be
      * <code>true</code> does not force an initial immediate activation of
      * a newly registered object;  initial activation is lazy.
-     * @exception ActivationException if the current group is nonexistent
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws ActivationException if the current group is nonexistent
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @since 1.2
      */
@@ -179,8 +184,8 @@ public final class ActivationDesc implements Serializable {
      * loaded)
      * @param data  the object's initialization (activation) data contained
      * in marshalled form.
-     * @exception IllegalArgumentException if <code>groupID</code> is null
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws IllegalArgumentException if <code>groupID</code> is null
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @since 1.2
      */
@@ -213,8 +218,8 @@ public final class ActivationDesc implements Serializable {
      * activated on demand.  Specifying <code>restart</code> to be
      * <code>true</code> does not force an initial immediate activation of
      * a newly registered object;  initial activation is lazy.
-     * @exception IllegalArgumentException if <code>groupID</code> is null
-     * @exception UnsupportedOperationException if and only if activation is
+     * @throws IllegalArgumentException if <code>groupID</code> is null
+     * @throws UnsupportedOperationException if and only if activation is
      * not supported by this implementation
      * @since 1.2
      */

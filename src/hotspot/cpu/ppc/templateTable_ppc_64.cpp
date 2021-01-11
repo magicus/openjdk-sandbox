@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, 2017 SAP SE. All rights reserved.
+ * Copyright (c) 2013, 2020 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,10 @@
 #include "interpreter/templateTable.hpp"
 #include "memory/universe.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/methodData.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/oop.inline.hpp"
+#include "prims/jvmtiExport.hpp"
 #include "prims/methodHandles.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
@@ -77,13 +79,6 @@ static void do_oop_load(InterpreterMacroAssembler* _masm,
   assert_different_registers(base, tmp1, tmp2);
   assert_different_registers(dst, tmp1, tmp2);
   __ load_heap_oop(dst, offset, base, tmp1, tmp2, false, decorators);
-}
-
-// ============================================================================
-// Platform-dependent initialization
-
-void TemplateTable::pd_initialize() {
-  // No ppc64 specific initialization.
 }
 
 Address TemplateTable::at_bcp(int offset) {
@@ -316,9 +311,10 @@ void TemplateTable::fast_aldc(bool wide) {
   __ get_cache_index_at_bcp(Rscratch, 1, index_size);  // Load index.
   __ load_resolved_reference_at_index(R17_tos, Rscratch, &is_null);
 
-  // Convert null sentinel to NULL.
+  // Convert null sentinel to NULL
   int simm16_rest = __ load_const_optimized(Rscratch, Universe::the_null_sentinel_addr(), R0, true);
   __ ld(Rscratch, simm16_rest, Rscratch);
+  __ resolve_oop_handle(Rscratch);
   __ cmpld(CCR0, R17_tos, Rscratch);
   if (VM_Version::has_isel()) {
     __ isel_0(R17_tos, CCR0, Assembler::equal);
@@ -1595,10 +1591,7 @@ void TemplateTable::lcmp() {
   __ pop_l(Rscratch); // first operand, deeper in stack
 
   __ cmpd(CCR0, Rscratch, R17_tos); // compare
-  __ mfcr(R17_tos); // set bit 32..33 as follows: <: 0b10, =: 0b00, >: 0b01
-  __ srwi(Rscratch, R17_tos, 30);
-  __ srawi(R17_tos, R17_tos, 31);
-  __ orr(R17_tos, Rscratch, R17_tos); // set result as follows: <: -1, =: 0, >: 1
+  __ set_cmp3(R17_tos); // set result as follows: <: -1, =: 0, >: 1
 }
 
 // fcmpl/fcmpg and dcmpl/dcmpg bytecodes
@@ -1615,21 +1608,10 @@ void TemplateTable::float_cmp(bool is_float, int unordered_result) {
     __ pop_d(Rfirst);
   }
 
-  Label Lunordered, Ldone;
   __ fcmpu(CCR0, Rfirst, Rsecond); // compare
-  if (unordered_result) {
-    __ bso(CCR0, Lunordered);
-  }
-  __ mfcr(R17_tos); // set bit 32..33 as follows: <: 0b10, =: 0b00, >: 0b01
-  __ srwi(Rscratch, R17_tos, 30);
-  __ srawi(R17_tos, R17_tos, 31);
-  __ orr(R17_tos, Rscratch, R17_tos); // set result as follows: <: -1, =: 0, >: 1
-  if (unordered_result) {
-    __ b(Ldone);
-    __ bind(Lunordered);
-    __ load_const_optimized(R17_tos, unordered_result);
-  }
-  __ bind(Ldone);
+  // if unordered_result is 1, treat unordered_result like 'greater than'
+  assert(unordered_result == 1 || unordered_result == -1, "unordered_result can be either 1 or -1");
+  __ set_cmpu3(R17_tos, unordered_result != 1);
 }
 
 // Branch_conditional which takes TemplateTable::Condition.
@@ -2178,7 +2160,7 @@ void TemplateTable::_return(TosState state) {
 
   if (_desc->bytecode() != Bytecodes::_return_register_finalizer) {
     Label no_safepoint;
-    __ ld(R11_scratch1, in_bytes(Thread::polling_page_offset()), R16_thread);
+    __ ld(R11_scratch1, in_bytes(Thread::polling_word_offset()), R16_thread);
     __ andi_(R11_scratch1, R11_scratch1, SafepointMechanism::poll_bit());
     __ beq(CCR0, no_safepoint);
     __ push(state);
@@ -2518,7 +2500,7 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
 
 #ifdef ASSERT
   __ bind(LFlagInvalid);
-  __ stop("got invalid flag", 0x654);
+  __ stop("got invalid flag");
 #endif
 
   if (!is_static && rc == may_not_rewrite) {
@@ -2533,7 +2515,7 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
   assert(__ pc() - pc_before_fence == (ptrdiff_t)BytesPerInstWord, "must be single instruction");
   assert(branch_table[vtos] == 0, "can't compute twice");
   branch_table[vtos] = __ pc(); // non-volatile_entry point
-  __ stop("vtos unexpected", 0x655);
+  __ stop("vtos unexpected");
 #endif
 
   __ align(32, 28, 28); // Align load.
@@ -2847,7 +2829,7 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static, RewriteContr
 
 #ifdef ASSERT
   __ bind(LFlagInvalid);
-  __ stop("got invalid flag", 0x656);
+  __ stop("got invalid flag");
 
   // __ bind(Lvtos);
   address pc_before_release = __ pc();
@@ -2855,7 +2837,7 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static, RewriteContr
   assert(__ pc() - pc_before_release == (ptrdiff_t)BytesPerInstWord, "must be single instruction");
   assert(branch_table[vtos] == 0, "can't compute twice");
   branch_table[vtos] = __ pc(); // non-volatile_entry point
-  __ stop("vtos unexpected", 0x657);
+  __ stop("vtos unexpected");
 #endif
 
   __ align(32, 28, 28); // Align pop.
@@ -3031,7 +3013,7 @@ void TemplateTable::putstatic(int byte_no) {
   putfield_or_static(byte_no, true);
 }
 
-// See SPARC. On PPC64, we have a different jvmti_post_field_mod which does the job.
+// On PPC64, we have a different jvmti_post_field_mod which does the job.
 void TemplateTable::jvmti_post_fast_field_mod() {
   __ should_not_reach_here();
 }

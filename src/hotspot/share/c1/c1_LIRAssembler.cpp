@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -521,9 +521,15 @@ void LIR_Assembler::emit_op1(LIR_Op1* op) {
       break;
     }
 
-    case lir_return:
-      return_op(op->in_opr());
+    case lir_return: {
+      assert(op->as_OpReturn() != NULL, "sanity");
+      LIR_OpReturn *ret_op = (LIR_OpReturn*)op;
+      return_op(ret_op->in_opr(), ret_op->stub());
+      if (ret_op->stub() != NULL) {
+        append_code_stub(ret_op->stub());
+      }
       break;
+    }
 
     case lir_safepoint:
       if (compilation()->debug_info_recorder()->last_pc_offset() == code_offset()) {
@@ -571,16 +577,6 @@ void LIR_Assembler::emit_op1(LIR_Op1* op) {
     case lir_monaddr:
       monitor_address(op->in_opr()->as_constant_ptr()->as_jint(), op->result_opr());
       break;
-
-#ifdef SPARC
-    case lir_pack64:
-      pack64(op->in_opr(), op->result_opr());
-      break;
-
-    case lir_unpack64:
-      unpack64(op->in_opr(), op->result_opr());
-      break;
-#endif
 
     case lir_unwind:
       unwind_op(op->in_opr());
@@ -835,11 +831,7 @@ void LIR_Assembler::verify_oop_map(CodeEmitInfo* info) {
         if (!r->is_stack()) {
           stringStream st;
           st.print("bad oop %s at %d", r->as_Register()->name(), _masm->offset());
-#ifdef SPARC
-          _masm->_verify_oop(r->as_Register(), os::strdup(st.as_string(), mtCompiler), __FILE__, __LINE__);
-#else
           _masm->verify_oop(r->as_Register());
-#endif
         } else {
           _masm->verify_stack_oop(r->reg2stack() * VMRegImpl::stack_slot_size);
         }

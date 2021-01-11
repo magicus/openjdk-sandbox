@@ -149,7 +149,7 @@ DEF_POLICY_DST := $(LIB_DST_DIR)/security/default.policy
 DEF_POLICY_SRC_LIST := $(DEF_POLICY_SRC)
 DEF_POLICY_SRC_LIST += $(CUSTOM_POLICY_SRC_LIST)
 
-ifeq ($(call isTargetOs, windows solaris), true)
+ifeq ($(call isTargetOs, windows), true)
   DEF_POLICY_SRC_LIST += $(TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS)/lib/security/default.policy
 endif
 
@@ -182,14 +182,18 @@ endif
 
 ################################################################################
 
-$(eval $(call SetupCopyFiles, COPY_NET_PROPERTIES, \
-    FILES := $(TOPDIR)/src/java.base/share/conf/net.properties, \
-    DEST := $(CONF_DST_DIR), \
-))
+NET_PROPERTIES_SRCS := $(TOPDIR)/src/java.base/share/conf/net.properties \
+	$(TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/conf/net.properties
 
-TARGETS += $(COPY_NET_PROPERTIES)
+NET_PROPERTIES_DST  := $(CONF_DST_DIR)/net.properties
 
-ifeq ($(call isTargetOs, solaris linux), true)
+$(NET_PROPERTIES_DST): $(NET_PROPERTIES_SRCS)
+	$(call MakeTargetDir)
+	$(CAT) $(NET_PROPERTIES_SRCS) > $@
+
+TARGETS += $(NET_PROPERTIES_DST)
+
+ifeq ($(call isTargetOs, linux), true)
   $(eval $(call SetupCopyFiles, COPY_SDP_CONF, \
       FILES := $(TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/conf/sdp/sdp.conf.template, \
       DEST := $(CONF_DST_DIR)/sdp, \

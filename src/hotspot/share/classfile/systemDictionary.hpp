@@ -25,61 +25,10 @@
 #ifndef SHARE_CLASSFILE_SYSTEMDICTIONARY_HPP
 #define SHARE_CLASSFILE_SYSTEMDICTIONARY_HPP
 
-#include "classfile/classLoaderData.hpp"
-#include "oops/objArrayOop.hpp"
-#include "oops/symbol.hpp"
-#include "runtime/java.hpp"
-#include "runtime/mutexLocker.hpp"
-#include "runtime/reflectionUtils.hpp"
+#include "oops/oopHandle.hpp"
+#include "runtime/handles.hpp"
 #include "runtime/signature.hpp"
-#include "utilities/hashtable.hpp"
-
-class ClassInstanceInfo : public StackObj {
- private:
-  InstanceKlass* _dynamic_nest_host;
-  Handle _class_data;
-
- public:
-  ClassInstanceInfo() {
-    _dynamic_nest_host = NULL;
-    _class_data = Handle();
-  }
-  ClassInstanceInfo(InstanceKlass* dynamic_nest_host, Handle class_data) {
-    _dynamic_nest_host = dynamic_nest_host;
-    _class_data = class_data;
-  }
-
-  InstanceKlass* dynamic_nest_host() const { return _dynamic_nest_host; }
-  Handle class_data() const { return _class_data; }
-  friend class ClassLoadInfo;
-};
-
-class ClassLoadInfo : public StackObj {
- private:
-  Handle                 _protection_domain;
-  const InstanceKlass*   _unsafe_anonymous_host;
-  GrowableArray<Handle>* _cp_patches;
-  ClassInstanceInfo      _class_hidden_info;
-  bool                   _is_hidden;
-  bool                   _is_strong_hidden;
-  bool                   _can_access_vm_annotations;
-
- public:
-  ClassLoadInfo();
-  ClassLoadInfo(Handle protection_domain);
-  ClassLoadInfo(Handle protection_domain, const InstanceKlass* unsafe_anonymous_host,
-                GrowableArray<Handle>* cp_patches, InstanceKlass* dynamic_nest_host,
-                Handle class_data, bool is_hidden, bool is_strong_hidden,
-                bool can_access_vm_annotations);
-
-  Handle protection_domain()             const { return _protection_domain; }
-  const InstanceKlass* unsafe_anonymous_host() const { return _unsafe_anonymous_host; }
-  GrowableArray<Handle>* cp_patches()    const { return _cp_patches; }
-  const ClassInstanceInfo* class_hidden_info_ptr() const { return &_class_hidden_info; }
-  bool is_hidden()                       const { return _is_hidden; }
-  bool is_strong_hidden()                const { return _is_strong_hidden; }
-  bool can_access_vm_annotations()       const { return _can_access_vm_annotations; }
-};
+#include "utilities/vmEnums.hpp"
 
 // The dictionary in each ClassLoaderData stores all loaded classes, either
 // initiatied by its class loader or defined by its class loader:
@@ -122,15 +71,20 @@ class ClassLoadInfo : public StackObj {
 
 class BootstrapInfo;
 class ClassFileStream;
+class ClassLoadInfo;
 class Dictionary;
 class PlaceholderTable;
 class LoaderConstraintTable;
 template <MEMFLAGS F> class HashtableBucket;
 class ResolutionErrorTable;
 class SymbolPropertyTable;
+class PackageEntry;
 class ProtectionDomainCacheTable;
 class ProtectionDomainCacheEntry;
 class GCTimer;
+class EventClassLoad;
+class Symbol;
+class TableStatistics;
 
 #define WK_KLASS_ENUM_NAME(kname)    kname##_knum
 
@@ -172,6 +126,7 @@ class GCTimer;
   do_klass(ClassCastException_klass,                    java_lang_ClassCastException                          ) \
   do_klass(ArrayStoreException_klass,                   java_lang_ArrayStoreException                         ) \
   do_klass(VirtualMachineError_klass,                   java_lang_VirtualMachineError                         ) \
+  do_klass(InternalError_klass,                         java_lang_InternalError                               ) \
   do_klass(OutOfMemoryError_klass,                      java_lang_OutOfMemoryError                            ) \
   do_klass(StackOverflowError_klass,                    java_lang_StackOverflowError                          ) \
   do_klass(IllegalMonitorStateException_klass,          java_lang_IllegalMonitorStateException                ) \
@@ -216,6 +171,7 @@ class GCTimer;
   do_klass(MethodType_klass,                            java_lang_invoke_MethodType                           ) \
   do_klass(BootstrapMethodError_klass,                  java_lang_BootstrapMethodError                        ) \
   do_klass(CallSite_klass,                              java_lang_invoke_CallSite                             ) \
+  do_klass(NativeEntryPoint_klass,                      jdk_internal_invoke_NativeEntryPoint                  ) \
   do_klass(Context_klass,                               java_lang_invoke_MethodHandleNatives_CallSiteContext  ) \
   do_klass(ConstantCallSite_klass,                      java_lang_invoke_ConstantCallSite                     ) \
   do_klass(MutableCallSite_klass,                       java_lang_invoke_MutableCallSite                      ) \
@@ -233,10 +189,13 @@ class GCTimer;
   do_klass(ByteArrayInputStream_klass,                  java_io_ByteArrayInputStream                          ) \
   do_klass(URL_klass,                                   java_net_URL                                          ) \
   do_klass(Jar_Manifest_klass,                          java_util_jar_Manifest                                ) \
+  do_klass(jdk_internal_loader_BuiltinClassLoader_klass,jdk_internal_loader_BuiltinClassLoader                ) \
   do_klass(jdk_internal_loader_ClassLoaders_klass,      jdk_internal_loader_ClassLoaders                      ) \
   do_klass(jdk_internal_loader_ClassLoaders_AppClassLoader_klass,      jdk_internal_loader_ClassLoaders_AppClassLoader) \
   do_klass(jdk_internal_loader_ClassLoaders_PlatformClassLoader_klass, jdk_internal_loader_ClassLoaders_PlatformClassLoader) \
   do_klass(CodeSource_klass,                            java_security_CodeSource                              ) \
+  do_klass(ConcurrentHashMap_klass,                     java_util_concurrent_ConcurrentHashMap                ) \
+  do_klass(ArrayList_klass,                             java_util_ArrayList                                   ) \
                                                                                                                 \
   do_klass(StackTraceElement_klass,                     java_lang_StackTraceElement                           ) \
                                                                                                                 \
@@ -267,6 +226,13 @@ class GCTimer;
                                                                                                                 \
   /* support for records */                                                                                     \
   do_klass(RecordComponent_klass,                       java_lang_reflect_RecordComponent                     ) \
+                                                                                                                \
+  /* support for vectors*/                                                                                      \
+  do_klass(vector_VectorSupport_klass,                  jdk_internal_vm_vector_VectorSupport                  ) \
+  do_klass(vector_VectorPayload_klass,                  jdk_internal_vm_vector_VectorPayload                  ) \
+  do_klass(vector_Vector_klass,                         jdk_internal_vm_vector_Vector                         ) \
+  do_klass(vector_VectorMask_klass,                     jdk_internal_vm_vector_VectorMask                     ) \
+  do_klass(vector_VectorShuffle_klass,                  jdk_internal_vm_vector_VectorShuffle                  ) \
                                                                                                                 \
   /*end*/
 
@@ -381,13 +347,8 @@ public:
   // loaders.  Returns "true" iff something was unloaded.
   static bool do_unloading(GCTimer* gc_timer);
 
-  // Applies "f->do_oop" to all root oops in the system dictionary.
-  // If include_handles is true (the default), then the handles in the
-  // vm_global OopStorage object are included.
-  static void oops_do(OopClosure* f, bool include_handles = true);
-
   // System loader lock
-  static oop system_loader_lock()           { return _system_loader_lock_obj; }
+  static oop system_loader_lock();
 
   // Protection Domain Table
   static ProtectionDomainCacheTable* pd_cache_table() { return _pd_cache_table; }
@@ -448,22 +409,15 @@ public:
   }
   static BasicType box_klass_type(Klass* k);  // inverse of box_klass
 #ifdef ASSERT
-  static bool is_well_known_klass(Klass* k) {
-    return is_well_known_klass(k->name());
-  }
+  static bool is_well_known_klass(Klass* k);
   static bool is_well_known_klass(Symbol* class_name);
 #endif
 
 protected:
   // Returns the class loader data to be used when looking up/updating the
   // system dictionary.
-  static ClassLoaderData *class_loader_data(Handle class_loader) {
-    return ClassLoaderData::class_loader_data(class_loader());
-  }
-
-  static bool is_wk_klass_loaded(InstanceKlass* klass) {
-    return !(klass == NULL || !klass->is_loaded());
-  }
+  static ClassLoaderData *class_loader_data(Handle class_loader);
+  static bool is_wk_klass_loaded(InstanceKlass* klass);
 
 public:
   static bool Object_klass_loaded()         { return is_wk_klass_loaded(WK_KLASS(Object_klass));             }
@@ -510,7 +464,7 @@ public:
                                             TRAPS);
   // for a given signature, find the internal MethodHandle method (linkTo* or invokeBasic)
   // (does not ask Java, since this is a low-level intrinsic defined by the JVM)
-  static Method* find_method_handle_intrinsic(vmIntrinsics::ID iid,
+  static Method* find_method_handle_intrinsic(vmIntrinsicID iid,
                                               Symbol* signature,
                                               TRAPS);
 
@@ -585,7 +539,7 @@ public:
   static PlaceholderTable*       _placeholders;
 
   // Lock object for system class loader
-  static oop                     _system_loader_lock_obj;
+  static OopHandle               _system_loader_lock_obj;
 
   // Constraints on class loaders
   static LoaderConstraintTable*  _loader_constraints;
@@ -610,6 +564,7 @@ protected:
   static LoaderConstraintTable* constraints() { return _loader_constraints; }
   static ResolutionErrorTable* resolution_errors() { return _resolution_errors; }
   static SymbolPropertyTable* invoke_method_table() { return _invoke_method_table; }
+  static void post_class_load_event(EventClassLoad* event, const InstanceKlass* k, const ClassLoaderData* init_cld);
 
   // Basic loading operations
   static InstanceKlass* resolve_instance_class_or_null_helper(Symbol* name,
@@ -631,11 +586,20 @@ protected:
   static bool is_shared_class_visible(Symbol* class_name, InstanceKlass* ik,
                                       PackageEntry* pkg_entry,
                                       Handle class_loader, TRAPS);
+  static bool is_shared_class_visible_impl(Symbol* class_name,
+                                           InstanceKlass* ik,
+                                           PackageEntry* pkg_entry,
+                                           Handle class_loader, TRAPS);
   static bool check_shared_class_super_type(InstanceKlass* child, InstanceKlass* super,
                                             Handle class_loader,  Handle protection_domain,
                                             bool is_superclass, TRAPS);
   static bool check_shared_class_super_types(InstanceKlass* ik, Handle class_loader,
                                                Handle protection_domain, TRAPS);
+  static InstanceKlass* load_shared_lambda_proxy_class(InstanceKlass* ik,
+                                                       Handle class_loader,
+                                                       Handle protection_domain,
+                                                       PackageEntry* pkg_entry,
+                                                       TRAPS);
   static InstanceKlass* load_shared_class(InstanceKlass* ik,
                                           Handle class_loader,
                                           Handle protection_domain,
@@ -663,14 +627,14 @@ public:
            is_system_class_loader(class_loader);
   }
   // Returns TRUE if the method is a non-public member of class java.lang.Object.
-  static bool is_nonpublic_Object_method(Method* m) {
-    assert(m != NULL, "Unexpected NULL Method*");
-    return !m->is_public() && m->method_holder() == SystemDictionary::Object_klass();
-  }
+  static bool is_nonpublic_Object_method(Method* m);
 
-protected:
+  // Return Symbol or throw exception if name given is can not be a valid Symbol.
+  static Symbol* class_name_symbol(const char* name, Symbol* exception, TRAPS);
+
   // Setup link to hierarchy
   static void add_to_hierarchy(InstanceKlass* k, TRAPS);
+protected:
 
   // Basic find on loaded classes
   static InstanceKlass* find_class(unsigned int hash,
@@ -700,8 +664,8 @@ protected:
   static InstanceKlass* _box_klasses[T_VOID+1];
 
 private:
-  static oop  _java_system_loader;
-  static oop  _java_platform_loader;
+  static OopHandle  _java_system_loader;
+  static OopHandle  _java_platform_loader;
 
 public:
   static TableStatistics placeholders_statistics();

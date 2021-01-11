@@ -557,10 +557,10 @@ final class CompilerToVM {
     native int getCountersSize();
 
     /**
-     * Change the size of the counters allocated for JVMCI. This requires a safepoint to
+     * Attempt to change the size of the counters allocated for JVMCI. This requires a safepoint to
      * safely reallocate the storage but it's advisable to increase the size in reasonable chunks.
      */
-    native void setCountersSize(int newSize);
+    native boolean setCountersSize(int newSize);
 
     /**
      * Determines if {@code metaspaceMethodData} is mature.
@@ -773,6 +773,11 @@ final class CompilerToVM {
     native void ensureInitialized(HotSpotResolvedObjectTypeImpl type);
 
     /**
+     * Forces linking of {@code type}.
+     */
+    native void ensureLinked(HotSpotResolvedObjectTypeImpl type);
+
+    /**
      * Checks if {@code object} is a String and is an interned string value.
      */
     native boolean isInternedString(HotSpotObjectConstantImpl object);
@@ -972,9 +977,10 @@ final class CompilerToVM {
     native long getCurrentJavaThread();
 
     /**
+     * @param name name of current thread if in a native image otherwise {@code null}
      * @see HotSpotJVMCIRuntime#attachCurrentThread
      */
-    native boolean attachCurrentThread(boolean asDaemon);
+    native boolean attachCurrentThread(byte[] name, boolean asDaemon);
 
     /**
      * @see HotSpotJVMCIRuntime#detachCurrentThread()
@@ -994,9 +1000,9 @@ final class CompilerToVM {
     /**
      * Adds phases in HotSpot JFR.
      *
-     * @see JFR.CompilerPhaseEvent#registerPhases and JFR.CompilerPhaseEvent#write
+     * @see JFR.CompilerPhaseEvent#write
      */
-    native int registerCompilerPhases(String[] phases);
+    native int registerCompilerPhase(String phaseName);
 
     /**
      * @see JFR.CompilerPhaseEvent#write

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2018 SAP SE. All rights reserved.
+ * Copyright (c) 2012, 2020 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "interp_masm_ppc.hpp"
 #include "interpreter/interpreterRuntime.hpp"
+#include "oops/methodData.hpp"
+#include "prims/jvmtiExport.hpp"
 #include "prims/jvmtiThreadState.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
@@ -222,7 +224,7 @@ void InterpreterMacroAssembler::dispatch_Lbyte_code(TosState state, Register byt
     address *sfpt_tbl = Interpreter::safept_table(state);
     if (table != sfpt_tbl) {
       Label dispatch;
-      ld(R0, in_bytes(Thread::polling_page_offset()), R16_thread);
+      ld(R0, in_bytes(Thread::polling_word_offset()), R16_thread);
       // Armed page has poll_bit set, if poll bit is cleared just continue.
       andi_(R0, R0, SafepointMechanism::poll_bit());
       beq(CCR0, dispatch);
@@ -490,7 +492,7 @@ void InterpreterMacroAssembler::load_resolved_reference_at_index(Register result
   sldi(R0, R0, LogBytesPerHeapOop);
   cmpd(CCR0, tmp, R0);
   blt(CCR0, index_ok);
-  stop("resolved reference index out of bounds", 0x09256);
+  stop("resolved reference index out of bounds");
   bind(index_ok);
 #endif
   // Add in the index.
@@ -770,7 +772,7 @@ void InterpreterMacroAssembler::merge_frames(Register Rsender_sp, Register retur
   ld(Rsender_sp, _ijava_state_neg(sender_sp), Rscratch1); // top_frame_sp
   ld(Rscratch2, 0, Rscratch1); // **SP
   if (return_pc!=noreg) {
-    ld(return_pc, _abi(lr), Rscratch1); // LR
+    ld(return_pc, _abi0(lr), Rscratch1); // LR
   }
 
   // Merge top frames.
@@ -847,7 +849,7 @@ void InterpreterMacroAssembler::remove_activation(TosState state,
     // call could have a smaller SP, so that this compare succeeds for an
     // inner call of the method annotated with ReservedStack.
     ld_ptr(R0, JavaThread::reserved_stack_activation_offset(), R16_thread);
-    ld_ptr(R11_scratch1, _abi(callers_sp), R1_SP); // Load frame pointer.
+    ld_ptr(R11_scratch1, _abi0(callers_sp), R1_SP); // Load frame pointer.
     cmpld(CCR0, R11_scratch1, R0);
     blt_predict_taken(CCR0, no_reserved_zone_enabling);
 
@@ -877,8 +879,7 @@ void InterpreterMacroAssembler::remove_activation(TosState state,
 //
 void InterpreterMacroAssembler::lock_object(Register monitor, Register object) {
   if (UseHeavyMonitors) {
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
-            monitor, /*check_for_exceptions=*/true);
+    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter), monitor);
   } else {
     // template code:
     //
@@ -908,6 +909,13 @@ void InterpreterMacroAssembler::lock_object(Register monitor, Register object) {
 
     // Load markWord from object into displaced_header.
     ld(displaced_header, oopDesc::mark_offset_in_bytes(), object);
+
+    if (DiagnoseSyncOnPrimitiveWrappers != 0) {
+      load_klass(tmp, object);
+      lwz(tmp, in_bytes(Klass::access_flags_offset()), tmp);
+      testbitdi(CCR0, R0, tmp, exact_log2(JVM_ACC_IS_BOX_CLASS));
+      bne(CCR0, slow_case);
+    }
 
     if (UseBiasedLocking) {
       biased_locking_enter(CCR0, object, displaced_header, tmp, current_header, done, &slow_case);
@@ -972,8 +980,7 @@ void InterpreterMacroAssembler::lock_object(Register monitor, Register object) {
     // None of the above fast optimizations worked so we have to get into the
     // slow case of monitor enter.
     bind(slow_case);
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
-            monitor, /*check_for_exceptions=*/true);
+    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter), monitor);
     // }
     align(32, 12);
     bind(done);
@@ -987,10 +994,9 @@ void InterpreterMacroAssembler::lock_object(Register monitor, Register object) {
 //             which must be initialized with the object to lock.
 //
 // Throw IllegalMonitorException if object is not locked by current thread.
-void InterpreterMacroAssembler::unlock_object(Register monitor, bool check_for_exceptions) {
+void InterpreterMacroAssembler::unlock_object(Register monitor) {
   if (UseHeavyMonitors) {
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
-            monitor, check_for_exceptions);
+    call_VM_leaf(CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit), monitor);
   } else {
 
     // template code:
@@ -1003,7 +1009,7 @@ void InterpreterMacroAssembler::unlock_object(Register monitor, bool check_for_e
     //   monitor->set_obj(NULL);
     // } else {
     //   // Slow path.
-    //   InterpreterRuntime::monitorexit(THREAD, monitor);
+    //   InterpreterRuntime::monitorexit(monitor);
     // }
 
     const Register object           = R7_ARG5;
@@ -1057,13 +1063,12 @@ void InterpreterMacroAssembler::unlock_object(Register monitor, bool check_for_e
 
     // } else {
     //   // Slow path.
-    //   InterpreterRuntime::monitorexit(THREAD, monitor);
+    //   InterpreterRuntime::monitorexit(monitor);
 
     // The lock has been converted into a heavy lock and hence
     // we need to get into the slow case.
     bind(slow_case);
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
-            monitor, check_for_exceptions);
+    call_VM_leaf(CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit), monitor);
     // }
 
     Label done;
@@ -1143,7 +1148,7 @@ void InterpreterMacroAssembler::call_from_interpreter(Register Rtarget_method, R
 #ifdef ASSERT
   ld(Rscratch1, _ijava_state_neg(top_frame_sp), Rscratch2); // Rscratch2 contains fp
   cmpd(CCR0, R21_sender_SP, Rscratch1);
-  asm_assert_eq("top_frame_sp incorrect", 0x951);
+  asm_assert_eq("top_frame_sp incorrect");
 #endif
 
   bctr();
@@ -1914,7 +1919,7 @@ void InterpreterMacroAssembler::profile_return_type(Register ret, Register tmp1,
       cmpwi(CCR0, tmp1, Bytecodes::_invokedynamic);
       cmpwi(CCR1, tmp1, Bytecodes::_invokehandle);
       cror(CCR0, Assembler::equal, CCR1, Assembler::equal);
-      cmpwi(CCR1, tmp2, vmIntrinsics::_compiledLambdaForm);
+      cmpwi(CCR1, tmp2, static_cast<int>(vmIntrinsics::_compiledLambdaForm));
       cror(CCR0, Assembler::equal, CCR1, Assembler::equal);
       bne(CCR0, profile_continue);
     }
@@ -2251,7 +2256,7 @@ void InterpreterMacroAssembler::restore_interpreter_state(Register scratch, bool
     subf(R0, R1_SP, scratch);
     cmpdi(CCR0, R0, frame::abi_reg_args_size + frame::ijava_state_size);
     bge(CCR0, Lok);
-    stop("frame too small (restore istate)", 0x5432);
+    stop("frame too small (restore istate)");
     bind(Lok);
   }
 #endif
@@ -2395,8 +2400,7 @@ void InterpreterMacroAssembler::notify_method_entry() {
     lwz(R0, in_bytes(JavaThread::interp_only_mode_offset()), R16_thread);
     cmpwi(CCR0, R0, 0);
     beq(CCR0, jvmti_post_done);
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::post_method_entry),
-            /*check_exceptions=*/true);
+    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::post_method_entry));
 
     bind(jvmti_post_done);
   }
@@ -2431,8 +2435,7 @@ void InterpreterMacroAssembler::notify_method_exit(bool is_native_method, TosSta
     cmpwi(CCR0, R0, 0);
     beq(CCR0, jvmti_post_done);
     if (!is_native_method) { push(state); } // Expose tos to GC.
-    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::post_method_exit),
-            /*check_exceptions=*/check_exceptions);
+    call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::post_method_exit), check_exceptions);
     if (!is_native_method) { pop(state); }
 
     align(32, 12);

@@ -29,8 +29,14 @@ import jdk.jpackage.test.TKit;
  * Tests generation of app image with --mac-sign and related arguments. Test will
  * generate app image and verify signature of main launcher and app bundle itself.
  * This test requires that machine is configured with test certificate for
- * "Developer ID Application: jpackage.openjdk.java.net" in jpackagerTest keychain with
- * always allowed access to this keychain for user which runs test.
+ * "Developer ID Application: jpackage.openjdk.java.net" or alternately
+ * "Developer ID Application: " + name specified by system property:
+ * "jpackage.mac.signing.key.user.name"
+ * in the jpackagerTest keychain (or alternately the keychain specified with
+ * the system property "jpackage.mac.signing.keychain".
+ * If this certificate is self-signed, it must have be set to
+ * always allowe access to this keychain" for user which runs test.
+ * (If cert is real (not self signed), the do not set trust to allow.)
  */
 
 /*
@@ -43,7 +49,7 @@ import jdk.jpackage.test.TKit;
  * @build SigningCheck
  * @build jtreg.SkippedException
  * @build jdk.jpackage.test.*
- * @modules jdk.incubator.jpackage/jdk.incubator.jpackage.internal
+ * @modules jdk.jpackage/jdk.jpackage.internal
  * @requires (os.family == "mac")
  * @run main/othervm -Xmx512m SigningAppImageTest
  */
@@ -56,7 +62,7 @@ public class SigningAppImageTest {
             JPackageCommand cmd = JPackageCommand.helloAppImage();
             cmd.addArguments("--mac-sign", "--mac-signing-key-user-name",
                     SigningBase.DEV_NAME, "--mac-signing-keychain",
-                    "jpackagerTest.keychain");
+                    SigningBase.KEYCHAIN);
             cmd.executeAndAssertHelloAppImageCreated();
 
             Path launcherPath = cmd.appLauncherPath();

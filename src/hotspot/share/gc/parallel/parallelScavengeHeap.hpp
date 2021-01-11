@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,7 @@
 
 class AdjoiningGenerations;
 class GCHeapSummary;
+class HeapBlockClaimer;
 class MemoryManager;
 class MemoryPool;
 class PSAdaptiveSizePolicy;
@@ -76,6 +77,7 @@ class ParallelScavengeHeap : public CollectedHeap {
 
   virtual void initialize_serviceability();
 
+  void trace_actual_reserved_page_size(const size_t reserved_heap_size, const ReservedSpace rs);
   void trace_heap(GCWhen::Type when, const GCTracer* tracer);
 
  protected:
@@ -126,7 +128,9 @@ class ParallelScavengeHeap : public CollectedHeap {
 
   static PSGCAdaptivePolicyCounters* gc_policy_counters() { return _gc_policy_counters; }
 
-  static ParallelScavengeHeap* heap();
+  static ParallelScavengeHeap* heap() {
+    return named_heap<ParallelScavengeHeap>(CollectedHeap::Parallel);
+  }
 
   CardTableBarrierSet* barrier_set();
   PSCardTable* card_table();
@@ -200,28 +204,25 @@ class ParallelScavengeHeap : public CollectedHeap {
   void ensure_parsability(bool retire_tlabs);
   void resize_all_tlabs();
 
-  bool supports_tlab_allocation() const { return true; }
-
   size_t tlab_capacity(Thread* thr) const;
   size_t tlab_used(Thread* thr) const;
   size_t unsafe_max_tlab_alloc(Thread* thr) const;
 
   void object_iterate(ObjectClosure* cl);
+  void object_iterate_parallel(ObjectClosure* cl, HeapBlockClaimer* claimer);
+  virtual ParallelObjectIterator* parallel_object_iterator(uint thread_num);
 
   HeapWord* block_start(const void* addr) const;
   bool block_is_obj(const HeapWord* addr) const;
-
-  jlong millis_since_last_gc();
 
   void prepare_for_verify();
   PSHeapSummary create_ps_heap_summary();
   virtual void print_on(outputStream* st) const;
   virtual void print_on_error(outputStream* st) const;
-  virtual void print_gc_threads_on(outputStream* st) const;
   virtual void gc_threads_do(ThreadClosure* tc) const;
   virtual void print_tracing_info() const;
 
-  virtual WorkGang* get_safepoint_workers() { return &_workers; }
+  virtual WorkGang* safepoint_workers() { return &_workers; }
 
   PreGenGCValues get_pre_gc_values() const;
   void print_heap_change(const PreGenGCValues& pre_gc_values) const;

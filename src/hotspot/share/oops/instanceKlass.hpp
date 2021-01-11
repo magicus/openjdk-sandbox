@@ -198,6 +198,10 @@ class InstanceKlass: public Klass {
   // By always being set it makes nest-member access checks simpler.
   InstanceKlass* _nest_host;
 
+  // The PermittedSubclasses attribute. An array of shorts, where each is a
+  // class info index for the class that is a permitted subclass.
+  Array<jushort>* _permitted_subclasses;
+
   // The contents of the Record attribute.
   Array<RecordComponent*>* _record_components;
 
@@ -364,6 +368,8 @@ class InstanceKlass: public Klass {
 
   void set_shared_class_loader_type(s2 loader_type);
 
+  void assign_class_loader_type();
+
   bool has_nonstatic_fields() const        {
     return (_misc_flags & _misc_has_nonstatic_fields) != 0;
   }
@@ -469,6 +475,10 @@ class InstanceKlass: public Klass {
   }
   bool is_record() const { return _record_components != NULL; }
 
+  // permitted subclasses
+  Array<u2>* permitted_subclasses() const     { return _permitted_subclasses; }
+  void set_permitted_subclasses(Array<u2>* s) { _permitted_subclasses = s; }
+
 private:
   // Called to verify that k is a member of this nest - does not look at k's nest-host
   bool has_nest_member(InstanceKlass* k, TRAPS) const;
@@ -484,6 +494,9 @@ public:
   // Check if this klass is a nestmate of k - resolves this nest-host and k's
   bool has_nestmate_access_to(InstanceKlass* k, TRAPS);
 
+  // Called to verify that k is a permitted subclass of this class
+  bool has_as_permitted_subclass(const InstanceKlass* k) const;
+
   enum InnerClassAttributeOffset {
     // From http://mirror.eng/products/jdk/1.1/docs/guide/innerclasses/spec/innerclasses.doc10.html#18814
     inner_class_inner_class_info_offset = 0,
@@ -498,9 +511,6 @@ public:
     enclosing_method_method_index_offset = 1,
     enclosing_method_attribute_size = 2
   };
-
-  // method override check
-  bool is_override(const methodHandle& super_method, Handle targetclassloader, Symbol* targetclassname, TRAPS);
 
   // package
   PackageEntry* package() const     { return _package_entry; }
@@ -540,6 +550,9 @@ public:
   bool is_reentrant_initialization(Thread *thread)  { return thread == _init_thread; }
   ClassState  init_state()                 { return (ClassState)_init_state; }
   bool is_rewritten() const                { return (_misc_flags & _misc_rewritten) != 0; }
+
+  // is this a sealed class
+  bool is_sealed() const;
 
   // defineClass specified verification
   bool should_verify_class() const         {
@@ -646,7 +659,7 @@ public:
   Method* uncached_lookup_method(const Symbol* name,
                                  const Symbol* signature,
                                  OverpassLookupMode overpass_mode,
-                                 PrivateLookupMode private_mode = find_private) const;
+                                 PrivateLookupMode private_mode = PrivateLookupMode::find) const;
 
   // lookup a method in all the interfaces that this class implements
   // (returns NULL if not found)
@@ -675,25 +688,8 @@ public:
   objArrayOop signers() const;
 
   // host class
-  InstanceKlass* unsafe_anonymous_host() const {
-    InstanceKlass** hk = adr_unsafe_anonymous_host();
-    if (hk == NULL) {
-      assert(!is_unsafe_anonymous(), "Unsafe anonymous classes have host klasses");
-      return NULL;
-    } else {
-      assert(*hk != NULL, "host klass should always be set if the address is not null");
-      assert(is_unsafe_anonymous(), "Only unsafe anonymous classes have host klasses");
-      return *hk;
-    }
-  }
-  void set_unsafe_anonymous_host(const InstanceKlass* host) {
-    assert(is_unsafe_anonymous(), "not unsafe anonymous");
-    const InstanceKlass** addr = (const InstanceKlass **)adr_unsafe_anonymous_host();
-    assert(addr != NULL, "no reversed space");
-    if (addr != NULL) {
-      *addr = host;
-    }
-  }
+  inline InstanceKlass* unsafe_anonymous_host() const;
+  inline void set_unsafe_anonymous_host(const InstanceKlass* host);
   bool is_unsafe_anonymous() const                {
     return (_misc_flags & _misc_is_unsafe_anonymous) != 0;
   }
@@ -1084,60 +1080,17 @@ public:
                                                has_stored_fingerprint());
   }
 
-  intptr_t* start_of_itable()   const { return (intptr_t*)start_of_vtable() + vtable_length(); }
-  intptr_t* end_of_itable()     const { return start_of_itable() + itable_length(); }
+  inline intptr_t* start_of_itable() const;
+  inline intptr_t* end_of_itable() const;
+  inline int itable_offset_in_words() const;
+  inline oop static_field_base_raw();
 
-  int  itable_offset_in_words() const { return start_of_itable() - (intptr_t*)this; }
+  inline OopMapBlock* start_of_nonstatic_oop_maps() const;
+  inline Klass** end_of_nonstatic_oop_maps() const;
 
-  oop static_field_base_raw() { return java_mirror(); }
-
-  OopMapBlock* start_of_nonstatic_oop_maps() const {
-    return (OopMapBlock*)(start_of_itable() + itable_length());
-  }
-
-  Klass** end_of_nonstatic_oop_maps() const {
-    return (Klass**)(start_of_nonstatic_oop_maps() +
-                     nonstatic_oop_map_count());
-  }
-
-  Klass* volatile* adr_implementor() const {
-    if (is_interface()) {
-      return (Klass* volatile*)end_of_nonstatic_oop_maps();
-    } else {
-      return NULL;
-    }
-  };
-
-  InstanceKlass** adr_unsafe_anonymous_host() const {
-    if (is_unsafe_anonymous()) {
-      InstanceKlass** adr_impl = (InstanceKlass**)adr_implementor();
-      if (adr_impl != NULL) {
-        return adr_impl + 1;
-      } else {
-        return (InstanceKlass **)end_of_nonstatic_oop_maps();
-      }
-    } else {
-      return NULL;
-    }
-  }
-
-  address adr_fingerprint() const {
-    if (has_stored_fingerprint()) {
-      InstanceKlass** adr_host = adr_unsafe_anonymous_host();
-      if (adr_host != NULL) {
-        return (address)(adr_host + 1);
-      }
-
-      Klass* volatile* adr_impl = adr_implementor();
-      if (adr_impl != NULL) {
-        return (address)(adr_impl + 1);
-      }
-
-      return (address)end_of_nonstatic_oop_maps();
-    } else {
-      return NULL;
-    }
-  }
+  inline Klass* volatile* adr_implementor() const;
+  inline InstanceKlass** adr_unsafe_anonymous_host() const;
+  inline address adr_fingerprint() const;
 
   // Use this to return the size of an instance in heap words:
   int size_helper() const {
@@ -1306,11 +1259,14 @@ private:
   void link_previous_versions(InstanceKlass* pv) { _previous_versions = pv; }
   void mark_newly_obsolete_methods(Array<Method*>* old_methods, int emcp_method_count);
 #endif
+  // log class name to classlist
+  void log_to_classlist(const ClassFileStream* cfs) const;
 public:
   // CDS support - remove and restore oops from metadata. Oops are not shared.
   virtual void remove_unshareable_info();
   virtual void remove_java_mirror();
   void restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, PackageEntry* pkg_entry, TRAPS);
+  void init_shared_package_entry();
 
   // jvm support
   jint compute_modifier_flags(TRAPS) const;
@@ -1347,7 +1303,7 @@ public:
 
   // Logging
   void print_class_load_logging(ClassLoaderData* loader_data,
-                                const char* module_name,
+                                const ModuleEntry* module_entry,
                                 const ClassFileStream* cfs) const;
 };
 
